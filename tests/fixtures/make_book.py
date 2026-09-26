@@ -951,11 +951,12 @@ def plan_book():
             printed += sec["pages"]
         ch["printed_end"] = printed - 1
     body_pages = printed - 1
-    appendix_start = OFFSET + body_pages + 1
+    answers = OFFSET + body_pages + 1
+    deriv = answers + ANSWER_PAGES
     return {
         "body_pages": body_pages,
-        "answers_pdf": (appendix_start, appendix_start + ANSWER_PAGES - 1),
-        "deriv_pdf": (appendix_start + ANSWER_PAGES, appendix_start + ANSWER_PAGES + DERIV_PAGES - 1),
+        "answers_pdf": (answers, answers + ANSWER_PAGES - 1),
+        "deriv_pdf": (deriv, deriv + DERIV_PAGES - 1),
         "total": OFFSET + body_pages + ANSWER_PAGES + DERIV_PAGES,
     }
 

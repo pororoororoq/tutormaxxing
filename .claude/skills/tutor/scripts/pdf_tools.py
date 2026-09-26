@@ -639,6 +639,10 @@ def quote(path):
     return '"%s"' % path
 
 
+def plural(n, noun):
+    return "%d %s%s" % (n, noun, "" if n == 1 else "s")
+
+
 # ---------------------------------------------------------------------------
 # info
 # ---------------------------------------------------------------------------
@@ -1098,13 +1102,14 @@ def cmd_find(args):
     if timed_out:
         rest = compress_pages([q for q in pages if q >= timed_out[0]])
         print("(%stime limit %gs reached; pdf %s not searched — continue with --pages %s%s)"
-              % ("+%d more pages with hits; " % extra if extra else "", args.time_limit, rest,
-                 rest, " without --printed" if args.printed else ""))
+              % ("+%s with hits; " % plural(extra, "more page") if extra else "",
+                 args.time_limit, rest, rest, " without --printed" if args.printed else ""))
     elif stopped:
-        print("(+%d more pages with hits; stopped early at pdf %d, %d pages not searched — "
-              "narrow with --pages or more specific text)" % (extra, stopped[0], stopped[1]))
+        print("(+%s with hits; stopped early at pdf %d, %s not searched — narrow with "
+              "--pages or more specific text)"
+              % (plural(extra, "more page"), stopped[0], plural(stopped[1], "page")))
     elif extra:
-        print("(+%d more pages with hits; raise --max or narrow with --pages)" % extra)
+        print("(+%s with hits; raise --max or narrow with --pages)" % plural(extra, "more page"))
     if scanned and low / scanned > 0.2:
         print("note: %d of %d searched pages have little or no text (scanned?); hits there "
               "can't be found by text — view those pages via split." % (low, scanned))
