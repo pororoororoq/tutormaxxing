@@ -32,9 +32,12 @@ reading, not a textbook's worth. Claude already knows the subject. The materials
   - calculator / formula sheet / notes allowed? (skip if a practice exam says)
 - No files at all? Say they can drop practice exams, homework, slides or the textbook into
   `inbox/` anytime, and offer to start from the topic list alone (section 8).
-- Create the course. It moves inbox files into `courses/SLUG/materials/`:
+- Create the course. It moves inbox files into `courses/SLUG/materials/` and creates every folder
+  the tutor uses (`tutor/notes`, `mocks`, `print`, `scratch`):
   `T init --slug SLUG --title "…" --exam YYYY-MM-DD [--exam-time HH:MM] [--exam-minutes N] [--questions N] [--aids "…"] [--scope "…"] --minutes N [--off sat,sun]`
   Then for each file: `T set --material "materials/FILE=KIND"`.
+- Write course files (blueprint, conventions, objectives, notes) with the Write tool, straight into
+  `courses/SLUG/tutor/`. It creates missing folders itself, so never run `mkdir`.
 
 ## 2. Setup check
 

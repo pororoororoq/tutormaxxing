@@ -5,7 +5,8 @@
       "Skill(tutor *)",
       "Bash(python3 *)",
       "Bash(python *)",
-      "Edit(/courses/**)"
+      "Edit(/courses/**)",
+      "Edit(courses/**)"
     ]
   }
 }

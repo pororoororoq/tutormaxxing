@@ -50,10 +50,12 @@ doesn't exist (some Windows setups), use `python`.
    `conventions.md` and cite § numbers from the objective. Don't read the textbook to teach;
    look things up in it only for specific needs (a data table, the book's exercises and answers,
    "how does my book do this?") with `pdf_tools.py` (see references/onboarding.md).
-10. **Math follows `"math"` in `next`'s output.** `latex`: inline `$…$`, display `$$…$$` on its
-    own lines, never `$$` inside a sentence, no `\,` `\;` `\!`, currency written `\$5`. `unicode`:
-    x², √(x+1), ∫₀¹ f(x) dx, θ, Δv, (a+b)/(c+d). Graphs, diagrams, mock exams and long derivations
-    go on a printable page (references/assessment.md, "Printables").
+10. **Math follows `"math"` and `"format"` in `next`'s output.** The student's screen decides:
+    in `unicode` mode the terminal shows LaTeX as raw code, so write x², √(x+1), ∫₀¹ f(x) dx, θ,
+    Δv, (a+b)/(c+d) and never use `$` or backslashes. In `latex` mode: inline `$…$`, display `$$…$$`
+    on its own lines, never `$$` inside a sentence, no `\,` `\;` `\!`, currency written `\$5`.
+    Graphs, diagrams, mock exams and long derivations go on a printable page (references/assessment.md,
+    "Printables").
 11. **Integrity.** If they bring live graded work (homework to hand in, a take-home exam), teach
     with a parallel problem instead of solving theirs.
 
@@ -65,7 +67,8 @@ doesn't exist (some Windows setups), use `python`.
    which method applies is itself an exam skill. Never reuse an item listed in `avoid`. Ask for
    confidence when `conf` is true.
 3. Student answers → verify (rule 2) → grade as correct / partial / wrong, noting hints used →
-   feedback (rule 4).
+   feedback (rule 4). Every graded answer gets at least one line of feedback before the next
+   item, probes and mixed items included; never jump straight to the next question.
 4. `T record --obj ID --ctx CTX --res RES [--hints N] [--conf 1-3] [--err CLASS] [--item "…"] [--key "…"] [--note "…"]`
    prints the outcome, then the next action as JSON. Continue from step 2 with that action.
 5. At `wrap` or `done` (or when the student has to go): finish on a success, run `T end`, and

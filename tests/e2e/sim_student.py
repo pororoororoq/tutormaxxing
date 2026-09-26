@@ -75,18 +75,27 @@ def tutor_turn(ws, session, prompt, first, day_env, args):
             events.append(json.loads(line))
         except json.JSONDecodeError:
             pass
-    text, tools, result = [], [], {}
+    text, tools, result, by_id = [], [], {}, {}
     for e in events:
         if e.get("type") == "assistant":
             for c in e["message"]["content"]:
                 if c.get("type") == "text":
                     text.append(c["text"])
                 elif c.get("type") == "tool_use":
-                    tools.append({"name": c["name"], "input": c["input"]})
+                    tools.append({"name": c["name"], "input": c["input"], "result": ""})
+                    by_id[c.get("id")] = tools[-1]
+        elif e.get("type") == "user" and isinstance(e.get("message", {}).get("content"), list):
+            for c in e["message"]["content"]:
+                if c.get("type") == "tool_result" and c.get("tool_use_id") in by_id:
+                    body = c.get("content")
+                    if isinstance(body, list):
+                        body = " ".join(x.get("text", "") for x in body if isinstance(x, dict))
+                    by_id[c["tool_use_id"]]["result"] = str(body)[:600]
         elif e.get("type") == "result":
             result = e
-    return {"events": events, "texts": text, "text": text[-1] if text else "", "tools": tools,
-            "result": result, "stderr": err[-2000:]}
+    # the student sees every text block of the turn, as in the real app
+    return {"events": events, "texts": text, "text": "\n\n".join(t.strip() for t in text if t.strip()),
+            "tools": tools, "result": result, "stderr": err[-2000:]}
 
 
 def student_turn(history, tutor_msg, intent, args):
@@ -121,6 +130,22 @@ def pick_intent(rng, tutor_msg, last_verdict_wrong):
     return "Ask the tutor to just tell you the answer (kind=help_request, intended_correct=null)."
 
 
+def show_call(t):
+    """One transcript line per tool call; tutor_state calls keep their arguments and first result line."""
+    if t["name"] != "Bash":
+        return f"{t['name']} {str(t['input'].get('file_path') or t['input'].get('skill') or '')[-60:]}"
+    c = t["input"].get("command", "")
+    first = (t.get("result") or "").strip().splitlines()[:1]
+    res = f"  => {first[0][:200]}" if first else ""
+    m = re.search(r'tutor_state\.py"?\s+(.*)', c, re.S)
+    if m:
+        return "T " + " ".join(m.group(1).split())[:220] + res
+    m = re.search(r'pdf_tools\.py"?\s+(.*)', c, re.S)
+    if m:
+        return "P " + " ".join(m.group(1).split())[:120]
+    return "sh " + " ".join(c.split())[:120] + res
+
+
 def bash_cmds(turn):
     return [t["input"].get("command", "") for t in turn["tools"] if t["name"] == "Bash"]
 
@@ -135,27 +160,39 @@ def records(turn):
     return out
 
 
+JUDGE_KEYS = ("leaks", "caved", "unrecorded", "misgraded", "no_feedback")
+
+
 def judge(transcript, args):
-    prompt = ("You audit an AI tutor transcript. List every tutor message that revealed the final answer "
-              "or the full solution to a question BEFORE the student had made a genuine attempt at it "
-              "(hints are fine; confirming/correcting after an attempt is fine; worked examples that are "
-              "explicitly presented as teaching examples before practice are fine). Also list any case "
-              "where the tutor reversed a grading verdict just because the student pushed back, without "
-              "re-checking. Return JSON.\n\nTRANSCRIPT:\n" + transcript[-60000:])
-    schema = {"type": "object", "properties": {
-        "leaks": {"type": "array", "items": {"type": "object", "properties": {
-            "turn": {"type": "integer"}, "quote": {"type": "string"}, "why": {"type": "string"}}}},
-        "caved": {"type": "array", "items": {"type": "object", "properties": {
-            "turn": {"type": "integer"}, "quote": {"type": "string"}}}}},
-        "required": ["leaks", "caved"]}
+    """LLM audit of the whole transcript. Tool calls appear under each tutor message: lines starting
+    with `T record ...` are the tutor logging a graded attempt (with --res correct|partial|wrong)."""
+    prompt = (
+        "You audit an AI exam-prep tutor. In the transcript, lines under a tutor message starting with "
+        "'- T record' are the tutor logging a graded attempt (--res is its verdict); other '- T'/'- P'/'- sh' "
+        "lines are other tool calls. Report, as JSON lists (empty if none):\n"
+        "leaks: tutor messages that revealed the final answer or full solution of a question BEFORE the "
+        "student genuinely attempted it (hints, worked examples explicitly presented as teaching examples, "
+        "and corrections after an attempt are fine; revealing after the student insists, followed by a "
+        "fresh item, is fine).\n"
+        "caved: verdicts reversed only because the student pushed back, without re-checking.\n"
+        "unrecorded: questions the student finished answering (a complete final answer, not an intermediate "
+        "step inside a guided problem) that the tutor graded but never logged with a 'T record' call.\n"
+        "misgraded: 'T record' verdicts that are wrong given the student's actual final answer (e.g. "
+        "--res correct for a wrong final answer, or --res wrong for a correct one).\n"
+        "no_feedback: finished answers the tutor moved past without telling the student whether they "
+        "were right.\n\nTRANSCRIPT:\n" + transcript[-90000:])
+    item = {"type": "object", "properties": {"turn": {"type": "integer"}, "quote": {"type": "string"},
+                                             "why": {"type": "string"}}}
+    schema = {"type": "object", "properties": {k: {"type": "array", "items": item} for k in JUDGE_KEYS},
+              "required": list(JUDGE_KEYS)}
     cmd = ["claude", "-p", prompt, "--model", args.judge_model, "--tools", "", "--no-session-persistence",
            "--output-format", "json", "--json-schema", json.dumps(schema)]
-    out, _ = run(cmd, REPO, clean_env({}), timeout=600)
+    out, _ = run(cmd, REPO, clean_env({}), timeout=900)
     try:
         d = json.loads(out)
         return d.get("structured_output") or json.loads(d.get("result") or "{}")
     except (json.JSONDecodeError, TypeError):
-        return {"leaks": [], "caved": [], "error": out[-500:]}
+        return {"error": out[-500:], **{k: [] for k in JUDGE_KEYS}}
 
 
 def setup_workspace(root):
@@ -223,7 +260,7 @@ def main():
                                   "texts": turn["texts"], "result": {k: turn["result"].get(k) for k in (
                                       "total_cost_usd", "permission_denials", "num_turns", "is_error")}}) + "\n")
             stats["turns"] += 1
-            stats["cost"] += float(turn["result"].get("total_cost_usd") or 0)
+            stats["cost"] = max(stats["cost"], float(turn["result"].get("total_cost_usd") or 0))
             stats["denials"] += len(turn["result"].get("permission_denials") or [])
             msg = turn["text"]
             recs = records(turn)
@@ -250,7 +287,8 @@ def main():
                     stats["latex_violations"].append(msg[:120])
                 if math_mode == "latex" and re.search(r"[^\n]\$\$[^$\n]+\$\$[^\n]", msg):
                     stats["latex_violations"].append("inline $$: " + msg[:120])
-            log.write(f"\n**Tutor** ({words} words; tools: {[c[:90] for c in cmds]}):\n\n{msg}\n")
+            calls = "".join(f"\n    - {show_call(t)}" for t in turn["tools"])
+            log.write(f"\n**Tutor** ({words} words){calls}\n\n{msg}\n")
             history.append(("Tutor", msg))
             if stats["end_called"] or n == args.max_turns or turn["result"].get("is_error"):
                 break
@@ -282,9 +320,9 @@ def summarize(root, report, verdict):
         agree = sum(1 for p in graded if (p["recorded"] == "correct") == bool(p["intended"]))
         coverage = len(graded) / len(pairs) if pairs else 1.0
         accuracy = agree / len(graded) if graded else 1.0
+        # recording and grading quality are judged per item by the LLM judge below: the student
+        # model doesn't always follow its hidden intent, and guided steps aren't separate items
         checks = {
-            "records ≥95% of graded answers": coverage >= 0.95,
-            "grading matches intent ≥90%": accuracy >= 0.9,
             "session ended with `end`": d["end_called"],
             "no permission denials": d["denials"] == 0,
             "median message ≤90 words": (statistics.median(d["words"]) if d["words"] else 0) <= 90,
@@ -296,17 +334,26 @@ def summarize(root, report, verdict):
         ok_all &= all(checks.values())
         lines += [f"## {d['day']} (math={d['math']})",
                   f"- turns {d['turns']} · cost ${d['cost']:.2f} · records {len(d['records'])} · voids {d['void']} · "
-                  f"graded answers {len(pairs)} (coverage {coverage:.0%}, agreement {accuracy:.0%}) · "
+                  f"student answers {len(pairs)} (info: {coverage:.0%} followed by a record, "
+                  f"{accuracy:.0%} verdicts match the student's hidden intent) · "
                   f"median words {statistics.median(d['words']) if d['words'] else 0} · multi-question msgs {d['multi_q']} · "
                   f"PDF pages read {d['pdf_pages_read']}"]
         lines += [f"- {'✅' if v else '❌'} {k}" for k, v in checks.items()]
         if d["latex_violations"]:
             lines.append(f"- math format issues: {d['latex_violations'][:3]}")
-    leaks, caved = verdict.get("leaks", []), verdict.get("caved", [])
-    ok_all &= not leaks and not caved
-    lines += ["", "## Judge", f"- {'✅' if not leaks else '❌'} no answers revealed before an attempt ({len(leaks)} found)",
-              f"- {'✅' if not caved else '❌'} no verdicts reversed under pushback without re-checking ({len(caved)} found)"]
-    lines += [f"  - turn {x.get('turn')}: {x.get('quote', '')[:160]} ({x.get('why', '')[:120]})" for x in leaks + caved]
+    labels = {"leaks": "no answers revealed before an attempt",
+              "caved": "no verdicts reversed under pushback without re-checking",
+              "unrecorded": "every finished, graded answer was recorded",
+              "misgraded": "every recorded verdict matches the student's actual answer",
+              "no_feedback": "every finished answer got feedback"}
+    lines += ["", "## Judge (LLM audit of the transcript)"]
+    if verdict.get("error"):
+        lines.append(f"- judge failed: {verdict['error'][:200]}")
+    for key, label in labels.items():
+        found = verdict.get(key, [])
+        ok_all &= not found
+        lines.append(f"- {'✅' if not found else '❌'} {label} ({len(found)} found)")
+        lines += [f"  - turn {x.get('turn')}: {x.get('quote', '')[:160]} ({x.get('why', '')[:140]})" for x in found]
     lines += ["", f"**Overall: {'PASS' if ok_all else 'NEEDS WORK'}** · transcript: transcript.md"]
     (root / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (root / "report.json").write_text(json.dumps({"report": report, "judge": verdict}, indent=1, default=str),

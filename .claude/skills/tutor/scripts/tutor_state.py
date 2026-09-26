@@ -154,6 +154,20 @@ def math_mode(course=None):
     return "latex" if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "") in DESKTOP_ENTRYPOINTS else "unicode"
 
 
+# Repeated in every `next`/`record` output: models drift back to LaTeX habits unless reminded in-band.
+MATH_FORMAT = {
+    "unicode": "plain-text math ONLY: x², √(x+1), (a+b)/(c+d), ∫₀¹, θ, Δv; no $ signs, no backslashes",
+    "latex": "LaTeX: inline $…$; display $$…$$ on its own line; never $$ mid-sentence; avoid \\, \\; \\!",
+}
+
+
+def with_math(a, course):
+    mode = math_mode(course)
+    a["math"] = mode
+    a["format"] = MATH_FORMAT[mode]
+    return a
+
+
 # --------------------------------------------------------------------------------------
 # Paths and storage
 # --------------------------------------------------------------------------------------
@@ -1240,7 +1254,7 @@ def brief_lines(P, now):
     ex_time = (course.get("exam") or {}).get("time")
     lines = [f"tutor · {course.get('title', P.slug)} ({P.slug}) · exam {fmt_day(env.exam)}"
              f"{' ' + ex_time if ex_time else ''} · {d} days left · today {fmt_day(today)} · "
-             f"math: {math_mode(course)}"]
+             f"math: {math_mode(course)} ({MATH_FORMAT[math_mode(course)]})"]
     if not st.objs:
         lines.append("setup incomplete: no objectives yet (continue onboarding at the objectives step)")
         lines.append(inbox_summary(P))
@@ -1344,7 +1358,7 @@ def cmd_init(args):
     exam = parse_date(args.exam, today)
     if exam <= start:
         raise TutorError(f"exam date {exam} must be after the start date {start}")
-    for sub in ("notes", "mocks", "print"):
+    for sub in ("notes", "mocks", "print", "scratch"):
         (P.tdir / sub).mkdir(parents=True, exist_ok=True)
     P.materials.mkdir(parents=True, exist_ok=True)
     course = {
@@ -1605,8 +1619,7 @@ def cmd_next(args):
     for ev in append_events(P, events, ensure_session(st, now, args.minutes)):
         st.apply(ev)
     a = decide(st, now, focus=args.focus)
-    a["math"] = math_mode(course)
-    jline(a)
+    jline(with_math(a, course))
     return 0
 
 
@@ -1639,8 +1652,7 @@ def cmd_record(args):
         out["flags"] = sorted(o.flags)
     jline(out)
     a = decide(st, now)
-    a["math"] = math_mode(course)
-    jline(a)
+    jline(with_math(a, course))
     return 0
 
 
