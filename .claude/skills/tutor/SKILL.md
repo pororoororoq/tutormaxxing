@@ -14,8 +14,9 @@ state engine remembers their progress between sessions and decides what comes ne
     python3 "${CLAUDE_SKILL_DIR}/scripts/tutor_state.py" <command>
 
 Below, `T <command>` is shorthand for exactly that line. Run one command per Bash call, with no
-`cd` and no `&&` (the project allows these calls without prompting the student). If `python3`
-doesn't exist (some Windows setups), use `python`.
+`cd` and no `&&`, and keep `python3 -c` checks on a single line (separate statements with `;`, no
+`#` comments). The project allows these calls without prompting the student; multi-line or chained
+commands can trigger a permission prompt. If `python3` doesn't exist (some Windows setups), use `python`.
 
 ## Rules (each exists because the evidence says so)
 

@@ -125,6 +125,20 @@ python3 -m unittest discover tests        # engine + 21-day simulated students
 `tests/test_simulation.py` runs strong, typical, weak and overloaded synthetic students through a
 full prep. Use it to check that a scheduling change actually helps.
 
+To test the tutor's actual *behavior* after changing SKILL.md or the references, run the
+end-to-end check. The real skill tutors a simulated student (a second Claude with hidden
+instructions to make mistakes, beg for answers and push back on grades) on a synthetic textbook
+and practice exam, then an LLM judge audits the transcript:
+
+```bash
+python3 tests/e2e/sim_student.py --days 2     # ~20–40 min, a few dollars of API usage
+```
+
+The report and full transcript land in `tests/e2e/runs/<timestamp>/`. It checks that no answer is
+revealed before an attempt, that every graded answer is recorded and graded correctly, that the
+tutor holds its ground under pushback, math formatting, session wrap-up, permission prompts, and
+how many PDF pages were read.
+
 ## Layout
 
 ```
