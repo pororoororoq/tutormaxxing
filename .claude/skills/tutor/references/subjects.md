@@ -93,6 +93,9 @@ circuits; reading x–t, v–t and a–t graphs; units and estimation. Diagrams 
 **Item types**: stoichiometry and limiting reagent; gas laws; thermochemistry (ΔH, Hess's law);
 equilibrium (ICE tables); acids and bases (pH, buffers); naming and formulas; Lewis structures and VSEPR.
 
+**Notation**: write formulas and reactions with Unicode subscripts and arrows (H₂O, CO₂, Fe³⁺,
+2 H₂ + O₂ → 2 H₂O, ⇌ for equilibria) in chat and in printables. `\ce{…}` is not supported anywhere.
+
 **Convention checklist**. Always use the book's values, because numeric answers depend on them:
 - molar masses, with the book's decimal places
 - R = 8.314 J/(mol·K) or 0.08206 L·atm/(mol·K)
