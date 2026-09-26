@@ -175,10 +175,13 @@ def judge(transcript, args):
         "and corrections after an attempt are fine; revealing after the student insists, followed by a "
         "fresh item, is fine).\n"
         "caved: verdicts reversed only because the student pushed back, without re-checking.\n"
-        "unrecorded: questions the student finished answering (a complete final answer, not an intermediate "
-        "step inside a guided problem) that the tutor graded but never logged with a 'T record' call.\n"
-        "misgraded: 'T record' verdicts that are wrong given the student's actual final answer (e.g. "
-        "--res correct for a wrong final answer, or --res wrong for a correct one).\n"
+        "unrecorded: questions the student finished answering on their own (a complete final answer to a "
+        "practice, diagnostic, review, mixed or mock item) that the tutor graded but never logged with a "
+        "'T record' call. Steps inside an interactive worked example the tutor is leading are not items.\n"
+        "misgraded: 'T record' verdicts that are wrong given the student's actual final answer: --res "
+        "correct for a wrong final answer, or --res wrong/partial for a fully correct one. (By the tutor's "
+        "rubric, 'partial' is RIGHT for a valid approach with an arithmetic slip, even if the final answer "
+        "is wrong; don't flag that.)\n"
         "no_feedback: finished answers the tutor moved past without telling the student whether they "
         "were right.\n\nTRANSCRIPT:\n" + transcript[-90000:])
     item = {"type": "object", "properties": {"turn": {"type": "integer"}, "quote": {"type": "string"},
@@ -252,7 +255,7 @@ def main():
                  "void": 0}
         log.write(f"\n\n# Day {day + 1}: {today} (math={math_mode})\n")
         prompt, first, last_wrong, pending_answer = opening, True, False, None
-        for n in range(args.max_turns + 1):
+        for n in range(args.max_turns + 2):     # +1 for the "have to go" wrap-up turn
             turn = tutor_turn(ws, session, prompt, first, day_env, args)
             first = False
             tturn += 1
@@ -290,8 +293,14 @@ def main():
             calls = "".join(f"\n    - {show_call(t)}" for t in turn["tools"])
             log.write(f"\n**Tutor** ({words} words){calls}\n\n{msg}\n")
             history.append(("Tutor", msg))
-            if stats["end_called"] or n == args.max_turns or turn["result"].get("is_error"):
+            if stats["end_called"] or turn["result"].get("is_error") or n > args.max_turns:
                 break
+            if n == args.max_turns:                 # time's up for the student: exercise the wrap-up
+                prompt = "sorry, I have to go now, can we stop here for today?"
+                history.append(("Student", prompt))
+                log.write(f"\n**Student** [turn cap: has to leave]:\n\n{prompt}\n")
+                pending_answer = None
+                continue
             last_wrong = bool(recs and recs[-1]["res"] in ("wrong", "partial"))
             intent = pick_intent(rng, msg, last_wrong)
             st = student_turn(history, msg, intent, args)

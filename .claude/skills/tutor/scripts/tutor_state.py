@@ -1123,11 +1123,11 @@ def plan_lines(course, events, start, title_of):
     for e in pr["log"]:
         parts = []
         if e["modes"]["review"]:
-            parts.append(f"{e['modes']['review']} reviews")
+            parts.append(plural(e["modes"]["review"], "review"))
         if e["new"]:
             parts.append("new: " + ", ".join(title_of(i) for i in e["new"]))
         if e["modes"]["probe"]:
-            parts.append(f"{e['modes']['probe']} probes")
+            parts.append(plural(e["modes"]["probe"], "probe"))
         if e["modes"]["mixed"]:
             parts.append(f"{e['modes']['mixed']} mixed")
         if e["mock"]:
@@ -1195,6 +1195,10 @@ def write_progress(P, course, st, now):
         lines += ["", "## Still to do before the exam", ""]
         lines += [f"- {u}" for u in rd["unmet_ready"] + rd["unmet_ace"]]
     (P.tdir / "progress.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
 
 
 def span(rng):
