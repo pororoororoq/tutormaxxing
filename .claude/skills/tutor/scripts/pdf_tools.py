@@ -8,7 +8,7 @@ small, targeted results.
   info FILE [FILE...]         pages, size, text layer, outline, labels, kind guess
   outline FILE                section tree:  2.4 The Chain Rule · p.25 · pdf 32
   labels FILE                 printed page labels as ranges (with the pdf offset)
-  find FILE TEXT              case-insensitive hits:  pdf 32 (p.25): …snippet…
+  find FILE TEXT              case-insensitive, a line per page:  pdf 32 (p.25): …snippet…
   text FILE --pages SPEC      page text, separated by  --- pdf 32 (p.25) ---
   split FILE --pages SPEC --out DIR
                               chunk PDFs (<=10 pages, <=19 MB) to view as images
@@ -19,6 +19,7 @@ pages instead: 25-29 | xii | A-1..A-3 (or A-1-A-3), resolved through the PDF's p
 labels, or through --offset N (pdf = printed + N) when the PDF has no labels.
 
 Exit codes: 0 ok, 2 usage, 3 missing dependency, 4 file/page error.
+Options per command: pdf_tools.py COMMAND -h
 """
 from __future__ import annotations
 
@@ -40,6 +41,7 @@ MB = 1000 * 1000
 
 PdfReader = PdfWriter = None  # bound by load_pypdf()
 PYPDF_ERRORS = ()
+PYPDF_IMPORT_ERROR = None
 
 
 class ToolError(Exception):
@@ -54,11 +56,23 @@ class ToolError(Exception):
 # dependency bootstrap
 # ---------------------------------------------------------------------------
 
-def load_pypdf():
-    global PdfReader, PdfWriter, PYPDF_ERRORS
+def import_pypdf():
+    """The pypdf module, or None when it is missing or broken."""
+    global PYPDF_IMPORT_ERROR
     try:
         import pypdf
-    except ImportError:
+        return pypdf
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as exc:  # ImportError, or e.g. a mismatched 'cryptography' panicking
+        PYPDF_IMPORT_ERROR = exc
+        return None
+
+
+def load_pypdf():
+    global PdfReader, PdfWriter, PYPDF_ERRORS
+    pypdf = import_pypdf()
+    if pypdf is None:
         return False
     import logging
     import warnings
@@ -114,14 +128,19 @@ def reexec_or_exit(root_arg):
             if os.name == "nt":  # execv on Windows detaches; wait for the child instead
                 sys.exit(subprocess.call(argv))
             os.execv(py, argv)
-    print('pypdf is not installed. Fix: python3 "%s" setup' % SCRIPT, file=sys.stderr)
+    exc = PYPDF_IMPORT_ERROR
+    if exc is None or (isinstance(exc, ImportError) and getattr(exc, "name", None) == "pypdf"):
+        print('pypdf is not installed. Fix: python3 "%s" setup' % SCRIPT, file=sys.stderr)
+    else:
+        print('pypdf is installed but fails to import (%s: %s). Fix: python3 "%s" setup'
+              % (type(exc).__name__, collapse(str(exc))[:120], SCRIPT), file=sys.stderr)
     sys.exit(EXIT_DEP)
 
 
 def _run(cmd, timeout=900):
     try:
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              universal_newlines=True, timeout=timeout)
+                              encoding="utf-8", errors="replace", timeout=timeout)
         return proc.returncode, proc.stdout or ""
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, str(exc)
@@ -136,13 +155,16 @@ def _last_line(text):
     return lines[-1][:200] if lines else "no output"
 
 
+def installed_pypdf_version():
+    pypdf = import_pypdf()
+    return getattr(pypdf, "__version__", "?") if pypdf is not None else None
+
+
 def cmd_setup(args):
-    try:
-        import pypdf
-        print("pypdf %s is already installed for %s." % (pypdf.__version__, sys.executable))
+    version = installed_pypdf_version()
+    if version:
+        print("pypdf %s is already installed for %s." % (version, sys.executable))
         return EXIT_OK
-    except ImportError:
-        pass
     root = find_root(getattr(args, "root", None)) or os.getcwd()
     venv_dir = os.path.join(root, "courses", ".venv")
     if os.path.isfile(venv_python(venv_dir)) and _can_import(venv_python(venv_dir)):
@@ -157,20 +179,25 @@ def cmd_setup(args):
         print("Installed pypdf for %s%s. Ready." % (sys.executable, "" if in_venv else " (--user)"))
         return EXIT_OK
     low = out.lower()
-    if not ("externally-managed-environment" in low or "no module named pip" in low or rc == 0):
+    if "externally-managed-environment" in low:   # PEP 668: Homebrew, Debian/Ubuntu, ...
+        reason = "this Python is externally managed"
+    elif "no module named pip" in low:
+        reason = "this Python has no pip"
+    elif rc == 0:
+        reason = "pypdf still won't import in this Python"
+    else:
         print("Could not install pypdf: %s" % _last_line(out))
         print('Fix by hand: "%s" -m pip install --user pypdf   (then re-run the command)'
               % sys.executable)
         return EXIT_DEP
-    # PEP 668 "externally managed" Python (Homebrew, Debian/Ubuntu) or no pip:
-    # install into a private venv under courses/, which the tools re-exec into.
+    # Fall back to a private venv under courses/, which the tools re-exec into.
     os.makedirs(os.path.dirname(venv_dir), exist_ok=True)
     py = venv_python(venv_dir)
     if not os.path.isfile(py):
         rc, out = _run([sys.executable, "-m", "venv", venv_dir])
         if rc != 0 or not os.path.isfile(py):
-            print("This Python won't install packages and creating %s failed: %s"
-                  % (venv_dir, _last_line(out)))
+            print("pypdf needs its own venv (%s), but creating %s failed: %s"
+                  % (reason, venv_dir, _last_line(out)))
             print("Fix: install the venv module (e.g. sudo apt install python3-venv), then "
                   "re-run setup.")
             return EXIT_DEP
@@ -179,7 +206,7 @@ def cmd_setup(args):
     if rc != 0 or not _can_import(py):
         print("Created %s but installing pypdf into it failed: %s" % (venv_dir, _last_line(out)))
         return EXIT_DEP
-    print("Installed pypdf into %s (this Python is externally managed)." % venv_dir)
+    print("Installed pypdf into %s (%s)." % (venv_dir, reason))
     print("pdf_tools.py uses it automatically when run from this project.")
     return EXIT_OK
 
@@ -368,7 +395,6 @@ class Pager:
     """Maps pdf pages to printed pages: --offset (for numbers) wins over page labels."""
 
     def __init__(self, labels, offset=None):
-        self.all_labels = labels
         self.labels = labels if labels is not None and not labels.trivial() else None
         self.offset = offset
 
@@ -387,7 +413,7 @@ class Pager:
         p = self.printed(pdf)
         return "pdf %d (p.%s)" % (pdf, p) if p else "pdf %d" % pdf
 
-    def resolve(self, token, n_pages, after=0):
+    def resolve(self, token, after=0):
         """pdf page for one printed page token, or None."""
         token = token.strip()
         if not token:
@@ -452,10 +478,10 @@ def _printed_range(item, n_pages, pager):
         candidates = [(item, None)]
         candidates += [(item[:m.start()], item[m.end():]) for m in re.finditer("[-–—]", item)]
     for a_tok, b_tok in candidates:
-        pa = pager.resolve(a_tok, n_pages)
+        pa = pager.resolve(a_tok)
         if pa is None:
             continue
-        pb = pa if b_tok is None else pager.resolve(b_tok, n_pages, after=pa - 1)
+        pb = pa if b_tok is None else pager.resolve(b_tok, after=pa - 1)
         if pb is None:
             continue
         if pb < pa:
@@ -565,9 +591,10 @@ def _pdf_error(path, exc):
                      % (path, name, str(exc)[:150]), EXIT_FILE)
 
 
-_NORMALIZE = str.maketrans({"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl",
-                            "ﬅ": "st", "ﬆ": "st", "­": None, " ": " ",
-                            "’": "'", "‘": "'", "“": '"', "”": '"'})
+_NORMALIZE = str.maketrans({  # ligatures, soft hyphen, no-break space, curly quotes
+    "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl", "\ufb03": "ffi", "\ufb04": "ffl",
+    "\ufb05": "st", "\ufb06": "st", "\u00ad": None, "\u00a0": " ",
+    "\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"'})
 
 
 _LEADERS = re.compile(r"(?:[.·…_] ?){4,}")  # dotted TOC leaders, blanks like "Name: ____"
@@ -597,7 +624,7 @@ def text_quality(t):
     if len(chars) < TEXT_MIN_CHARS:
         return "little"
     letters = sum(1 for c in chars if c.isalpha())
-    if letters / len(chars) < LETTER_RATIO_MIN or t.count("�") > 5 or "(cid:" in t:
+    if letters / len(chars) < LETTER_RATIO_MIN or t.count("\ufffd") > 5 or "(cid:" in t:
         return "garbled"
     return None
 
@@ -746,11 +773,11 @@ def info_lines(path):
             pass
     kind, why = guess_kind(n, "\n".join(texts.values()), landscape, len(entries),
                            [e[1] for e in entries[:60]], title)
-    first = normalize(texts.get(1, ""))
+    first = search_text(texts.get(1, ""))
     first = first[:160] + ("…" if len(first) > 160 else "")
     return [
         path,
-        "  %d pages · %.2f MB · %s · %s" % (n, size, enc, layer),
+        "  %d page%s · %.2f MB · %s · %s" % (n, "" if n == 1 else "s", size, enc, layer),
         "  outline: %d entries · %s" % (len(entries), lab),
         "  title: %s" % (title or "(none)"),
         "  kind: %s (%s)" % (kind, why),
@@ -779,6 +806,8 @@ _TOC_LINE = re.compile(r"^(?P<title>.*?[^\s.·…])(?P<lead>\s*(?:[.·…]\s*)+|
 _TOC_PAGE_ONLY = re.compile(r"^(?:[.·…]\s*)*" + _TOC_PAGE + "$")
 _TOC_NUM = re.compile(r"^(?P<num>(?:\d{1,3}|[A-Z])(?:\.\d{1,3})+|\d{1,3})\.?\s+(?=\S)")
 _TOC_KEYWORD = re.compile(r"^(chapter|part|appendix|unit|module|lecture|book)\b", re.I)
+_TOC_KEYWORD_ONLY = re.compile(r"^(chapter|part|appendix|unit|module|lecture|section)"
+                               r"(\s+(\d{1,3}|[ivxlcdm]{1,6}|[A-Z]))?\s*[.:]?$", re.I)
 _TOC_TOP = re.compile(r"^(preface|foreword|prologue|epilogue|contents|acknowledg|index|"
                       r"bibliography|references|glossary|answers|appendix|appendices|notation|"
                       r"symbols|list of|about the|credits|further reading|solutions)", re.I)
@@ -792,8 +821,9 @@ def _toc_parse_line(line):
     if not m:
         return None
     title, page, lead = m.group("title").strip(), m.group("page"), m.group("lead")
-    if len(re.findall(r"[^\W\d_]", title)) < 2 or len(title) > 160 or _TOC_SKIP.match(title):
-        return None
+    if (len(re.findall(r"[^\W\d_]", title)) < 2 or len(title) > 160 or _TOC_SKIP.match(title)
+            or _TOC_KEYWORD_ONLY.match(title)):
+        return None   # "Chapter 3" alone is a heading, not "Chapter" on page 3
     if re.fullmatch(r"[ivxlcdm]+", page, re.I):
         value = roman_to_int(page)
         if value is None or value > 100:
@@ -809,6 +839,9 @@ def _toc_lines(text):
     out, i = [], 0
     while i < len(raw):
         line = raw[i]
+        if (_TOC_KEYWORD_ONLY.match(line) and i + 1 < len(raw)
+                and not _TOC_KEYWORD_ONLY.match(raw[i + 1])):
+            line, i = line + " " + raw[i + 1], i + 1   # "Chapter 3" / "Derivatives ..... 150"
         if not _TOC_LINE.match(line) and i + 1 < len(raw):
             nxt = raw[i + 1]
             starts_entry = _TOC_NUM.match(line) or _TOC_KEYWORD.match(line)
@@ -869,6 +902,12 @@ def toc_levels(entries):
     return out
 
 
+def _no_labels_phrase(pdf):
+    if pdf.labels is not None and pdf.labels.trivial():
+        return "page labels only count 1-%d" % pdf.n
+    return "no page labels"
+
+
 def cmd_outline(args):
     pdf = Pdf(args.file)
     pager = pdf.pager(args.offset)
@@ -893,8 +932,8 @@ def cmd_outline(args):
         rows = [(lvl, title, pager.printed(page) if page else None, page)
                 for lvl, title, page in marks]
         if not pager.known:
-            notes.append("(no page labels, so printed page numbers are not shown; add --offset N "
-                          "to show them, where pdf page = printed page + N)")
+            notes.append("(%s, so printed page numbers are not shown; add --offset N to show "
+                         "them, where pdf page = printed page + N)" % _no_labels_phrase(pdf))
     else:
         toc = toc or find_toc(pdf)
         if toc is None:
@@ -907,7 +946,7 @@ def cmd_outline(args):
         last_toc = toc_pages[-1]
         rows = []
         for level, title, printed in toc_levels(entries):
-            page = pager.resolve(printed, pdf.n, after=last_toc)
+            page = pager.resolve(printed, after=last_toc)
             rows.append((level, title, printed, page if page and 1 <= page <= pdf.n else None))
         if args.offset is not None:
             how = "pdf = printed + %d from --offset" % args.offset
@@ -916,7 +955,7 @@ def cmd_outline(args):
         elif pager.labels is not None:
             how = "printed→pdf via page labels"
         else:
-            how = "no page labels, so pdf pages are unknown"
+            how = "%s, so pdf pages are unknown" % _no_labels_phrase(pdf)
         header = "source: toc-text (contents on pdf %s; %s)" % (compress_pages(toc_pages), how)
         if not pager.known:
             ref = next(((t, p) for _, t, p, _ in rows if p.isdigit()), None)
@@ -925,8 +964,6 @@ def cmd_outline(args):
                              'that heading; offset = that pdf page − %s; then re-run outline '
                              'with --offset <offset>'
                              % (quote(args.file), ref[0], min(last_toc + 1, pdf.n), pdf.n, ref[1]))
-        elif pdf.labels is not None and pdf.labels.trivial() and args.offset is None:
-            notes.append("note: page labels only count 1..N; verify with find")
 
     print(header)
     if not rows:
@@ -1124,11 +1161,15 @@ def cmd_text(args):
                 if quality:
                     flagged.append(p)
                 break
-            print(t if t else "[no text on this page]")
             used += len(t)
             if quality:
                 flagged.append(p)
-                print("[%s]" % QUALITY_NOTE[quality])
+            if not t:
+                print("[no text on this page: likely a scanned page, a figure, or a blank page]")
+            else:
+                print(t)
+                if quality:
+                    print("[%s]" % QUALITY_NOTE[quality])
     if flagged:
         print("note: pdf %s may read better as an image: split %s --pages %s --out <dir>, "
               "then Read the chunk PDF." % (compress_pages(flagged), quote(args.file),
@@ -1248,24 +1289,21 @@ def build_parser():
                        help="pdf page = printed page + N; for PDFs without page labels "
                             "(overrides labels for numeric pages)")
 
-    parser = _Parser(prog=os.path.basename(SCRIPT),
-                     description="Token-cheap PDF helpers for the tutor skill.",
-                     epilog="SPEC: 1-based pdf pages like 32-36 | 5,7,9-12 | 40-end. "
-                            "Exit codes: 0 ok, 2 usage, 3 missing dependency, 4 file/page error.",
-                     parents=[common])
+    parser = _Parser(prog=os.path.basename(SCRIPT), description=__doc__,
+                     formatter_class=argparse.RawDescriptionHelpFormatter, parents=[common])
     parser.set_defaults(root=None)
     sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")
     sub.required = True
 
-    p = sub.add_parser("setup", parents=[common], help="install pypdf (works without it)")
+    p = sub.add_parser("setup", parents=[common], description="install pypdf (works without it)")
     p.set_defaults(func=cmd_setup)
 
-    p = sub.add_parser("info", parents=[common], help="summary of one or more PDFs")
+    p = sub.add_parser("info", parents=[common], description="summary of one or more PDFs")
     p.add_argument("files", nargs="+", metavar="FILE")
     p.set_defaults(func=cmd_info)
 
     p = sub.add_parser("outline", parents=[common],
-                       help="section tree with printed and pdf pages")
+                       description="section tree with printed and pdf pages")
     p.add_argument("file", metavar="FILE")
     p.add_argument("--depth", type=_positive_int, metavar="N", help="show levels < N (1 = top)")
     p.add_argument("--match", metavar="REGEX",
@@ -1276,12 +1314,12 @@ def build_parser():
                    help="parse the printed table of contents even if bookmarks exist")
     p.set_defaults(func=cmd_outline)
 
-    p = sub.add_parser("labels", parents=[common], help="printed page labels as ranges")
+    p = sub.add_parser("labels", parents=[common], description="printed page labels as ranges")
     p.add_argument("file", metavar="FILE")
     p.set_defaults(func=cmd_labels)
 
     p = sub.add_parser("find", parents=[common, pages],
-                       help="case-insensitive search, one line per page with hits")
+                       description="case-insensitive search, one line per page with hits")
     p.add_argument("file", metavar="FILE")
     p.add_argument("text", metavar="TEXT")
     p.add_argument("--regex", action="store_true", help="TEXT is a regular expression")
@@ -1293,7 +1331,7 @@ def build_parser():
                         "(default 90)")
     p.set_defaults(func=cmd_find)
 
-    p = sub.add_parser("text", parents=[common, pages], help="text of a few pages")
+    p = sub.add_parser("text", parents=[common, pages], description="text of a few pages")
     p.add_argument("file", metavar="FILE")
     p.add_argument("--pages", required=True, metavar="SPEC")
     p.add_argument("--max-chars", type=_positive_int, default=12000, metavar="N",
@@ -1303,7 +1341,7 @@ def build_parser():
     p.set_defaults(func=cmd_text)
 
     p = sub.add_parser("split", parents=[common, pages],
-                       help="write chunk PDFs small enough to view as images")
+                       description="write chunk PDFs small enough to view as images")
     p.add_argument("file", metavar="FILE")
     p.add_argument("--pages", required=True, metavar="SPEC")
     p.add_argument("--out", required=True, metavar="DIR")
@@ -1333,7 +1371,11 @@ def main(argv=None):
         return exc.code
     except KeyboardInterrupt:
         return 130
-    except BrokenPipeError:
+    except BrokenPipeError:  # output piped into e.g. `head`: stop quietly
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
         return EXIT_OK
     except Exception as exc:
         if os.environ.get("TUTOR_DEBUG"):

@@ -1041,10 +1041,10 @@ class Doc(FPDF):
     def para(self, item, size=11, space=2.6):
         self.set_font(self.fam, "", size)
         if isinstance(item, tuple):
-            head, text = item
+            head, text = self.t(item[0]), self.t(item[1])
             if any(m in head + text for m in ("**", "__", "--", "~~", "](")):
                 raise SystemExit("markdown-sensitive text: %r" % (head + text))
-            self.multi_cell(0, 5.8, "**%s** %s" % (self.t(head), self.t(text)),
+            self.multi_cell(0, 5.8, "**%s** %s" % (head, text),
                             markdown=True, new_x="LMARGIN", new_y="NEXT")
         else:
             self.multi_cell(0, 5.8, self.t(item), new_x="LMARGIN", new_y="NEXT")
