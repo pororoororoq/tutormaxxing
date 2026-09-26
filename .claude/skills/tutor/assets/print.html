@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<!--
+  Tutor print template, filled in by scripts/render.py. Placeholders (in double
+  braces): TITLE = page title, HTML-escaped; ASSETS = relative URL of the copied
+  vendor folder; BODY_CLASS = "notes" or "exam"; MARKDOWN_JSON = the Markdown
+  source as a JSON string with < > & escaped, so it can't end its script tag.
+  Rendering happens here in the browser: math -> placeholders -> marked -> KaTeX.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="generator" content="tutor skill render.py">
+<title>{{TITLE}}</title>
+<link rel="stylesheet" href="{{ASSETS}}/katex/katex.min.css">
+<style>
+  /* ---- Tokens: light by default; dark only on screen; print forces black on white. */
+  :root {
+    --ink: #1b1b1b;
+    --ink-soft: #4f4f4f;
+    --paper: #ffffff;
+    --rule: #cfcfcf;
+    --tint: #f3f3f0;            /* code and table-header background */
+    --link: #1d5fb8;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, "Iowan Old Style",
+             "Palatino Linotype", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media screen and (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e7e5df;
+      --ink-soft: #b7b5ae;
+      --paper: #19191a;
+      --rule: #47474c;
+      --tint: #26262a;
+      --link: #8db6f2;
+    }
+  }
+
+  /* ---- Page */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { background: var(--paper); color: var(--ink); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    margin: 0 auto;
+    max-width: 46rem;
+    padding: 1.25rem 1.25rem 4rem;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 1.125rem;
+    line-height: 1.6;
+    font-kerning: normal;
+    overflow-wrap: break-word;
+  }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.8em 0 0.6em; break-after: avoid; }
+  h1 { font-size: 1.8rem; margin-top: 0.3em; }
+  h2 { font-size: 1.4rem; }
+  h3 { font-size: 1.15rem; }
+  h4 { font-size: 1rem; }
+  p, ul, ol, dl, table, pre, blockquote, figure { margin: 0 0 1em; }
+  ul, ol { padding-left: 1.6em; }
+  li + li { margin-top: 0.3em; }
+  li > p { margin: 0.3em 0; }
+  a { color: var(--link); }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 2em 0; }
+  blockquote { margin-left: 0; padding: 0.1em 0 0.1em 1em; border-left: 3px solid var(--rule); color: var(--ink-soft); }
+  img { max-width: 100%; height: auto; }
+  .content svg { max-width: 100%; }
+  .content > :first-child { margin-top: 0; }
+
+  /* ---- Code and tables */
+  code, kbd, samp, pre { font-family: var(--mono); font-size: 0.86em; }
+  :not(pre) > code { background: var(--tint); padding: 0.08em 0.3em; border-radius: 3px; }
+  pre { background: var(--tint); padding: 0.8em 1em; border-radius: 4px; overflow-x: auto; line-height: 1.45; }
+  pre code { font-size: inherit; }
+  table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; font-variant-numeric: tabular-nums; }
+  th, td { border: 1px solid var(--rule); padding: 0.3em 0.7em; vertical-align: top; }
+  th { background: var(--tint); }
+
+  /* ---- Math: a touch larger than the text; long equations scroll on screen */
+  .katex { font-size: 1.1em; }
+  .katex-display { margin: 1em 0; padding: 0.2em 0; overflow-x: auto; overflow-y: hidden; }
+  .math-source { white-space: pre-wrap; }
+
+  /* ---- Plots (SVG made by render.py) and notes */
+  figure.plot { margin: 1.4em auto; text-align: center; break-inside: avoid; }
+  figure.plot figcaption { margin: 0 0 0.4em; font-size: 0.95em; }
+  figure.plot svg { display: block; width: 100%; max-width: 560px; height: auto; margin: 0 auto; }
+  .plot-note { margin: 0.4em 0 0; font: 0.8rem/1.4 var(--sans); color: var(--ink-soft); }
+  .plot-error, .render-note { font: 0.9rem/1.45 var(--sans); padding: 0.6em 0.9em; border-radius: 4px; margin: 0 0 1em; }
+  .plot-error { border: 1px solid #c4410c; border-left-width: 4px; background: #fff5ef; color: #4a1a06; }
+  .plot-error pre { background: transparent; padding: 0.5em 0 0; margin: 0; font-size: 0.85em; }
+  .render-note { border: 1px solid #e3b341; background: #fff7e0; color: #4a3800; }
+  .md-fallback { white-space: pre-wrap; }
+
+  /* ---- Screen-only toolbar */
+  .toolbar { display: flex; justify-content: flex-end; margin: 0 0 0.75rem; }
+  .toolbar button {
+    font: 0.85rem var(--sans); color: var(--ink); background: var(--tint);
+    border: 1px solid var(--rule); border-radius: 4px; padding: 0.35em 0.9em; cursor: pointer;
+  }
+  .toolbar button:hover { border-color: var(--ink-soft); }
+
+  /* ---- Exam layout (body.exam, from --exam) */
+  .exam-header { display: none; }
+  body.exam .exam-header { display: block; margin: 0 0 1.6em; padding-bottom: 0.9em; border-bottom: 2px solid var(--ink); }
+  .exam-title { margin: 0 0 0.7em; font-size: 1.7rem; }
+  .exam-fields { display: flex; flex-wrap: wrap; gap: 0.6em 2.5em; }
+  .blank { display: inline-block; height: 1.1em; border-bottom: 1px solid currentColor; vertical-align: baseline; }
+  .blank-long { width: 15em; }
+  .blank-short { width: 3.5em; }
+  .exam-note { margin: 0.7em 0 0; font-size: 0.92em; font-style: italic; }
+  body.exam .question { margin: 0 0 1.4em; break-inside: avoid; page-break-inside: avoid; }
+  body.exam .question > h2 { font-size: 1.2rem; margin-top: 0; }
+  .work-area { height: 6cm; margin: 0.6em 0 0; border: 1px solid #bdbdbd; border-radius: 4px; }
+
+  /* ---- Dark screens: figures stay on white "paper" so their dark ink shows */
+  @media screen and (prefers-color-scheme: dark) {
+    figure.plot { background: #fff; color: #1b1b1b; padding: 0.75em; border-radius: 6px; }
+    svg.md-svg { background: #fff; border-radius: 4px; }
+    .work-area { border-color: var(--rule); }
+    .plot-error { background: #3a1d12; color: #ffd9c9; }
+    .render-note { background: #3a3012; color: #ffeab0; }
+  }
+
+  /* ---- Print: always black on white, no screen-only UI */
+  @page { size: auto; margin: 16mm 15mm 18mm; }
+  @page {
+    @bottom-right { content: counter(page) " / " counter(pages); font-family: Georgia, serif; font-size: 9pt; color: #555; }
+  }
+  @media print {
+    :root { --ink: #000; --ink-soft: #333; --paper: #fff; --rule: #999; --tint: transparent; --link: #000; }
+    html, body { background: #fff !important; color: #000; }
+    body { max-width: none; margin: 0; padding: 0; font-size: 11.5pt; line-height: 1.45; }
+    .screen-only { display: none !important; }
+    a { color: inherit; text-decoration: none; }
+    h1, h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
+    p, li, blockquote { orphans: 3; widows: 3; }
+    pre, table, figure, blockquote, .katex-display, .plot-error { break-inside: avoid; page-break-inside: avoid; }
+    pre { white-space: pre-wrap; border: 1px solid #999; }
+    table { display: table; }
+    .katex-display { overflow: visible; }
+    .work-area { border-color: #aaa; }
+  }
+</style>
+</head>
+<body class="{{BODY_CLASS}}">
+<div class="toolbar screen-only">
+  <button type="button" onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+<!-- Exam header: only shown in exam mode. A leading "# " heading replaces the title. -->
+<header class="exam-header">
+  <h1 class="exam-title">{{TITLE}}</h1>
+  <div class="exam-fields">
+    <span>Name: <span class="blank blank-long" aria-label="blank"></span></span>
+    <span>Time allowed: <span class="blank blank-short" aria-label="blank"></span> min</span>
+  </div>
+  <p class="exam-note">No aids (notes, books, calculators, phones) are allowed unless stated.</p>
+</header>
+
+<main id="content" class="content">
+  <noscript><p class="render-note">This page needs JavaScript to show its formatting and math.</p></noscript>
+</main>
+
+<script type="application/json" id="md-source">{{MARKDOWN_JSON}}</script>
+<script src="{{ASSETS}}/marked/marked.umd.js"></script>
+<script src="{{ASSETS}}/katex/katex.min.js"></script>
+<script>
+/*
+ * Renders the embedded Markdown.
+ *  1. protectMath: find math ($..$, \(..\), $$..$$, \[..\]) outside code and HTML
+ *     tags; swap each for a placeholder of private-use characters Markdown ignores,
+ *     so marked can't eat the _ * \ inside it.
+ *  2. marked.parse the protected text (raw HTML passes through).
+ *  3. Replace placeholders in the resulting DOM with KaTeX output, or with the
+ *     original source where math makes no sense (inside code, pre, svg, attributes).
+ * If marked failed to load, the raw Markdown is shown in a <pre> instead.
+ */
+(function () {
+  'use strict';
+
+  var PH_OPEN = '', PH_CLOSE = '';
+  var PH_RE = /(\d+)/g;
+  var SPECIAL = /[\\`<$]/g;
+  var PUNCT = /[!-\/:-@\[-`{-~]/;          // ASCII punctuation: Markdown backslash escapes
+  var TAG_RE = new RegExp(                  // HTML comment, closing tag, opening tag, autolink
+    '<!-{2}[\\s\\S]*?-{2}>' +
+    '|<\\/[A-Za-z][A-Za-z0-9-]*\\s*>' +
+    '|<[A-Za-z][A-Za-z0-9-]*(?:\\s+[A-Za-z_:][\\w.:-]*(?:\\s*=\\s*(?:[^\\s"\'=<>`]+|\'[^\']*\'|"[^"]*"))?)*\\s*\\/?>' +
+    '|<[A-Za-z][A-Za-z0-9.+-]{1,31}:[^\\s<>]*>', 'y');
+  var FENCE_OPEN = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})(.*)$/;   // same rules as render.py
+  var FENCE_CLOSE = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})[ \t]*$/;
+  var LITERAL = /^(code|pre|kbd|samp|script|style|textarea|title|svg|math)$/i;
+
+  var root = document.documentElement;
+  var content = document.getElementById('content');
+  var hasKatex = !!(window.katex && typeof window.katex.renderToString === 'function');
+  var macros = {};                          // shared, so \gdef definitions carry over
+  var md;
+
+  try {
+    md = JSON.parse(document.getElementById('md-source').textContent);
+  } catch (err) {
+    content.textContent = '';
+    content.appendChild(note('Could not read the embedded Markdown (' + err.message + ').'));
+    root.setAttribute('data-render', 'error');
+    return;
+  }
+  md = md.replace(/[]/g, '');
+
+  if (!window.marked || typeof window.marked.parse !== 'function') {
+    showRaw('The page renderer did not load (is the "_assets" folder still next to this file?). ' +
+            'Showing the raw text instead.');
+    return;
+  }
+  try {
+    render();
+    root.setAttribute('data-render', 'ok');
+  } catch (err) {
+    showRaw('Rendering failed (' + (err && err.message) + '). Showing the raw text instead.');
+  }
+
+  // ------------------------------------------------------------------ helpers
+
+  function note(text) {
+    var p = document.createElement('p');
+    p.className = 'render-note';
+    p.textContent = text;
+    return p;
+  }
+
+  function showRaw(reason) {
+    content.textContent = '';
+    content.appendChild(note(reason));
+    var pre = document.createElement('pre');
+    pre.className = 'md-fallback';
+    pre.textContent = md;
+    content.appendChild(pre);
+    root.setAttribute('data-render', 'fallback');
+  }
+
+  function render() {
+    var prot = protectMath(md);
+    var tpl = document.createElement('template');
+    tpl.innerHTML = window.marked.parse(prot.text, { gfm: true, breaks: false, async: false });
+    var frag = tpl.content;
+    var svgs = frag.querySelectorAll('svg');    // before KaTeX adds its own
+    for (var i = 0; i < svgs.length; i++) svgs[i].classList.add('md-svg');
+    fillMath(frag, prot.items);
+    content.textContent = '';
+    if (!hasKatex && prot.items.length) {
+      content.appendChild(note('The math renderer did not load, so formulas are shown as LaTeX source.'));
+    }
+    content.appendChild(frag);
+    if (document.body.classList.contains('exam')) setUpExam();
+  }
+
+  // ------------------------------------------------------- 1. protect math
+
+  function protectMath(src) {
+    var items = [], out = [], last = 0, i = 0, n = src.length;
+    var fences = findFences(src), fi = 0, j;
+
+    function lineStart(p) { return src.lastIndexOf('\n', p - 1) + 1; }
+    function lineEnd(p) { var e = src.indexOf('\n', p); return e < 0 ? n : e; }
+    // Is the delimiter at [start, end) alone on its line (block style)?
+    function alone(start, end) {
+      return /^[ \t>]*$/.test(src.slice(lineStart(start), start)) &&
+             /^[ \t]*$/.test(src.slice(end, lineEnd(end)));
+    }
+    function add(start, end, tex, display) {
+      if (/^[ \t]*>/.test(src.slice(lineStart(start), start))) {
+        tex = tex.replace(/\n[ \t]*(?:>[ \t]?)+/g, '\n');   // drop blockquote markers
+      }
+      out.push(src.slice(last, start), PH_OPEN + items.length + PH_CLOSE);
+      items.push({ tex: tex, display: display, raw: src.slice(start, end) });
+      last = end;
+    }
+
+    while (i < n) {
+      while (fi < fences.length && fences[fi][1] <= i) fi++;
+      var limit = fi < fences.length ? fences[fi][0] : n;
+      if (i >= limit) { i = fences[fi][1]; fi++; continue; }   // fenced code: copy as is
+      var c = src.charAt(i);
+
+      if (c === '\\') {
+        var d = src.charAt(i + 1);
+        if (d === '(' || d === '[') {
+          var display = d === '[';
+          j = findEscapedClose(src, i + 2, display ? ']' : ')', limit, display && alone(i, i + 2));
+          if (j >= 0) { add(i, j + 2, src.slice(i + 2, j), display); i = j + 2; continue; }
+        }
+        i += PUNCT.test(d) ? 2 : 1;          // leave \$ \* \` ... for marked
+        continue;
+      }
+      if (c === '`') {                        // code span: skip it whole
+        var run = runLength(src, i, '`');
+        j = findCodeClose(src, i + run, run, limit);
+        i = j >= 0 ? j + run : i + run;
+        continue;
+      }
+      if (c === '<') {                        // HTML tag or comment: skip it whole
+        TAG_RE.lastIndex = i;
+        var m = TAG_RE.exec(src);
+        i += m ? m[0].length : 1;
+        continue;
+      }
+      if (c === '$') {
+        if (src.charAt(i + 1) === '$') {
+          j = findDoubleDollar(src, i + 2, limit, alone(i, i + 2));
+          if (j >= 0 && /\S/.test(src.slice(i + 2, j))) { add(i, j + 2, src.slice(i + 2, j), true); i = j + 2; continue; }
+          i += 2;
+          continue;
+        }
+        if (/\S/.test(src.charAt(i + 1))) {   // $ must be followed by non-space
+          j = findDollar(src, i + 1, limit);
+          if (j >= 0) { add(i, j + 1, src.slice(i + 1, j), false); i = j + 1; continue; }
+        }
+        i++;
+        continue;
+      }
+      SPECIAL.lastIndex = i;                  // plain text: jump to the next candidate
+      var s = SPECIAL.exec(src);
+      i = Math.min(s ? s.index : n, limit);
+    }
+    out.push(src.slice(last));
+    return { text: out.join(''), items: items };
+  }
+
+  function findFences(src) {
+    var ranges = [], lines = src.split('\n'), pos = 0, open = null;
+    for (var k = 0; k < lines.length; k++) {
+      var line = lines[k], start = pos, m;
+      pos += line.length + 1;
+      if (open) {
+        m = FENCE_CLOSE.exec(line);
+        if (m && m[1].charAt(0) === open.ch && m[1].length >= open.len) {
+          ranges.push([open.start, Math.min(pos, src.length)]);
+          open = null;
+        }
+        continue;
+      }
+      m = FENCE_OPEN.exec(line);
+      if (m && !(m[1].charAt(0) === '`' && m[2].indexOf('`') >= 0)) {
+        open = { ch: m[1].charAt(0), len: m[1].length, start: start };
+      }
+    }
+    if (open) ranges.push([open.start, src.length]);
+    return ranges;
+  }
+
+  function runLength(src, p, ch) {
+    var k = p;
+    while (src.charAt(k) === ch) k++;
+    return k - p;
+  }
+
+  // Does a blank line (paragraph break) start at p?
+  function blankAt(src, p) {
+    var e = src.indexOf('\n', p);
+    return /^[ \t>]*$/.test(src.slice(p, e < 0 ? src.length : e));
+  }
+
+  function findCodeClose(src, from, run, limit) {
+    for (var k = from; k < limit;) {
+      var ch = src.charAt(k);
+      if (ch === '`') {
+        var r = runLength(src, k, '`');
+        if (r === run) return k;
+        k += r;
+        continue;
+      }
+      if (ch === '\n' && blankAt(src, k + 1)) return -1;
+      k++;
+    }
+    return -1;
+  }
+
+  // \( ... \)  or  \[ ... \]
+  function findEscapedClose(src, from, closer, limit, allowBlank) {
+    for (var k = from; k < limit; k++) {
+      var ch = src.charAt(k);
+      if (ch === '\\') {
+        if (src.charAt(k + 1) === closer) return k;
+        k++;
+        continue;
+      }
+      if (ch === '\n' && !allowBlank && blankAt(src, k + 1)) return -1;
+    }
+    return -1;
+  }
+
+  // $$ ... $$  (blank lines allowed only when the opening $$ is alone on its line)
+  function findDoubleDollar(src, from, limit, allowBlank) {
+    for (var k = from; k < limit; k++) {
+      var ch = src.charAt(k);
+      if (ch === '\\') { k++; continue; }
+      if (ch === '\n' && !allowBlank && blankAt(src, k + 1)) return -1;
+      if (ch === '$' && src.charAt(k + 1) === '$') return k;
+    }
+    return -1;
+  }
+
+  // $ ... $  (Pandoc rules: the first unescaped $ must close it, it must follow a
+  // non-space and not precede a digit, so "$5 and $10" stays text)
+  function findDollar(src, from, limit) {
+    for (var k = from; k < limit; k++) {
+      var ch = src.charAt(k);
+      if (ch === '\\') { k++; continue; }
+      if (ch === '\n' && blankAt(src, k + 1)) return -1;
+      if (ch === '$') {
+        if (/\s/.test(src.charAt(k - 1)) || /[0-9]/.test(src.charAt(k + 1))) return -1;
+        return k;
+      }
+    }
+    return -1;
+  }
+
+  // ------------------------------------------------------- 3. fill in math
+
+  function restore(text, items) {
+    return text.replace(PH_RE, function (_, k) { return items[+k].raw; });
+  }
+
+  function insideLiteral(node) {
+    for (var p = node.parentNode; p && p.nodeType === 1; p = p.parentNode) {
+      if (LITERAL.test(p.localName || p.nodeName)) return true;
+    }
+    return false;
+  }
+
+  function mathNode(item) {
+    if (!hasKatex) {
+      var code = document.createElement('code');
+      code.className = 'math-source';
+      code.textContent = item.raw;
+      return code;
+    }
+    var t = document.createElement('template');
+    t.innerHTML = window.katex.renderToString(item.tex, {
+      displayMode: item.display, throwOnError: false, strict: 'ignore',
+      output: 'htmlAndMathml', macros: macros
+    });
+    return t.content;
+  }
+
+  function fillMath(frag, items) {
+    if (!items.length) return;
+    var els = frag.querySelectorAll('*'), i, a;
+    for (i = 0; i < els.length; i++) {           // attributes (alt, title...): source text
+      for (a = 0; a < els[i].attributes.length; a++) {
+        var attr = els[i].attributes[a];
+        if (attr.value.indexOf(PH_OPEN) >= 0) attr.value = restore(attr.value, items);
+      }
+    }
+    var doc = frag.ownerDocument || document;
+    var walker = doc.createTreeWalker(frag, NodeFilter.SHOW_TEXT, null);
+    var nodes = [];
+    while (walker.nextNode()) {
+      if (walker.currentNode.nodeValue.indexOf(PH_OPEN) >= 0) nodes.push(walker.currentNode);
+    }
+    nodes.forEach(function (node) {
+      if (insideLiteral(node)) { node.nodeValue = restore(node.nodeValue, items); return; }
+      var text = node.nodeValue, parts = doc.createDocumentFragment(), last = 0, m;
+      PH_RE.lastIndex = 0;
+      while ((m = PH_RE.exec(text))) {
+        if (m.index > last) parts.appendChild(doc.createTextNode(text.slice(last, m.index)));
+        parts.appendChild(mathNode(items[+m[1]]));
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) parts.appendChild(doc.createTextNode(text.slice(last)));
+      node.parentNode.replaceChild(parts, node);
+    });
+  }
+
+  // ------------------------------------------------------------- exam mode
+
+  function setUpExam() {
+    var first = content.firstElementChild;
+    if (first && first.classList.contains('render-note')) first = first.nextElementSibling;
+    var title = document.querySelector('.exam-title');
+    if (first && first.tagName === 'H1' && title) {     // "# Title" becomes the exam title
+      title.textContent = '';
+      while (first.firstChild) title.appendChild(first.firstChild);
+      first.parentNode.removeChild(first);
+    }
+    decorateQuestions(content);
+  }
+
+  // Questions: "## " headings, or paragraphs starting with **Q1.** (or **Question 1**).
+  // A "## " section that contains **Qn.** paragraphs is a section title instead.
+  function decorateQuestions(container) {
+    var kids = Array.prototype.slice.call(container.children);
+    var segments = [], seg = { head: null, items: [] };
+    kids.forEach(function (el) {
+      if (/^(H1|H2|HR)$/.test(el.tagName)) { segments.push(seg); seg = { head: el, items: [] }; }
+      else seg.items.push(el);
+    });
+    segments.push(seg);
+    segments.forEach(function (sg) {
+      var isH2 = sg.head && sg.head.tagName === 'H2';
+      if (isH2 && !sg.items.some(isQuestionPara)) { wrapQuestion([sg.head].concat(sg.items)); return; }
+      var run = null;
+      sg.items.forEach(function (el) {
+        if (isQuestionPara(el)) { if (run) wrapQuestion(run); run = [el]; }
+        else if (run) run.push(el);
+      });
+      if (run) wrapQuestion(run);
+    });
+  }
+
+  function isQuestionPara(el) {
+    if (el.tagName !== 'P') return false;
+    var f = el.firstChild;
+    while (f && f.nodeType === 3 && !/\S/.test(f.nodeValue)) f = f.nextSibling;
+    return !!f && f.nodeType === 1 && f.tagName === 'STRONG' &&
+      /^(?:Q|Question)\s*\d+[a-z]?\b/i.test(f.textContent.trim());
+  }
+
+  function wrapQuestion(els) {
+    var section = document.createElement('section');
+    section.className = 'question';
+    els[0].parentNode.insertBefore(section, els[0]);
+    els.forEach(function (el) { section.appendChild(el); });
+    var work = document.createElement('div');
+    work.className = 'work-area';
+    work.setAttribute('aria-hidden', 'true');
+    section.appendChild(work);
+  }
+})();
+</script>
+</body>
+</html>

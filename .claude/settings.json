@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(tutor)",
+      "Skill(tutor *)",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Edit(/courses/**)"
+    ]
+  }
+}

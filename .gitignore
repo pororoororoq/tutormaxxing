@@ -1,0 +1,14 @@
+# Your study data stays on your machine: textbooks are copyrighted and progress is personal.
+inbox/
+courses/
+*.pdf
+
+# Python / tooling
+.venv/
+__pycache__/
+*.pyc
+
+# Test runs
+tests/e2e/runs/
+
+.DS_Store
