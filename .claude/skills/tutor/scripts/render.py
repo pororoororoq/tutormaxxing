@@ -9,7 +9,8 @@ The tutor writes Markdown with LaTeX math and ```plot blocks; this script turns 
 into a standalone page that opens in the student's browser and prints cleanly
 (students take mock exams from these pages on paper).
 
-  --out      output file (default: IN.md's folder and stem, with .html)
+  --out      output file, or an existing folder to write STEM.html into
+             (default: IN.md's folder and stem, with .html)
   --title    page title (default: the first "# heading", else the file name)
   --exam     mock-exam layout: a header with Name / Time allowed / "no aids"
              lines; each question (a "## " heading, or a paragraph starting with
@@ -351,6 +352,8 @@ def parse_range(text):
     lo, hi = _const(parts[0]), _const(parts[1])
     if not lo < hi:
         raise PlotError("range %r must go from smaller to larger" % text.strip())
+    if not hi - lo < 1e300:
+        raise PlotError("range %r is too large" % text.strip())
     return lo, hi
 
 
@@ -394,10 +397,11 @@ def parse_plot_block(lines, first_lineno=1):
     """Parse the lines inside a plot fence.
 
     Returns (spec, problems): problems are (line number, message) pairs for
-    lines that were skipped.
+    lines that were skipped.  A bad x/y range is not skippable (the plot would
+    silently show a different window), so it goes to spec["errors"] instead.
     """
     spec = {"title": None, "x": None, "y": None, "funcs": [],
-            "points": [], "vlines": [], "hlines": []}
+            "points": [], "vlines": [], "hlines": [], "errors": []}
     problems = []
     for offset, raw in enumerate(lines):
         lineno = first_lineno + offset
@@ -415,7 +419,10 @@ def parse_plot_block(lines, first_lineno=1):
                 if key == "title":
                     spec["title"] = value or None
                 elif key in ("x", "y"):
-                    spec[key] = parse_range(value)
+                    try:
+                        spec[key] = parse_range(value)
+                    except (ExprError, PlotError) as exc:
+                        spec["errors"].append((lineno, "bad %s range: %s" % (key, exc)))
                 elif key == "points":
                     spec["points"].extend(parse_points(value))
                 elif key == "vline":
@@ -534,6 +541,8 @@ def _auto_y_range(series, points, hlines, xmin, xmax):
         lo, hi = min(lo, h), max(hi, h)
     if lo == math.inf:
         lo, hi = -1.0, 1.0
+    if not hi - lo < 1e300:
+        raise PlotError("the values are too large to plot; give a y range such as 'y: -10..10'")
     if hi - lo <= 1e-9 * max(1.0, abs(lo), abs(hi)):
         lo, hi = lo - 1.0, hi + 1.0
     span = hi - lo
@@ -650,7 +659,7 @@ def _pretty_label(label):
     s = _superscripts(label).replace("**", "^")
     s = re.sub(r"\bpi\b", "\u03c0", s)
     s = re.sub(r"\bsqrt\(", "\u221a(", s)
-    s = re.sub(r"(?<![\w.])(\d+(?:\.\d+)?)\s*\*\s*(?=x\b|\u03c0|e\b|\()", r"\1", s)
+    s = re.sub(r"(?<![\w.])(\d+(?:\.\d+)?)\s*\*\s*(?=[xe](?![A-Za-z0-9_])|\u03c0|\()", r"\1", s)
     s = s.replace("*", "\u00b7")
     s = _minus(s)
     return s if len(s) <= 70 else s[:67] + "..."
@@ -668,6 +677,143 @@ def _simplify_offscreen(pts, ymin, ymax):
     return out
 
 
+class _Frame:
+    """Data -> SVG pixel mapping for one plot, and where its axes are drawn."""
+
+    def __init__(self, xmin, xmax, ymin, ymax):
+        self.xmin, self.xmax, self.ymin, self.ymax = xmin, xmax, ymin, ymax
+        self.left, self.right = MARGIN_LEFT, PLOT_WIDTH - MARGIN_RIGHT
+        self.top, self.bottom = MARGIN_TOP, PLOT_HEIGHT - MARGIN_BOTTOM
+        x_in, y_in = xmin <= 0 <= xmax, ymin <= 0 <= ymax
+        self.ax = self.px(0.0) if x_in else self.left      # the y-axis
+        self.ay = self.py(0.0) if y_in else self.bottom    # the x-axis
+        self.origin = x_in and y_in
+
+    def px(self, x):
+        return self.left + (x - self.xmin) / (self.xmax - self.xmin) * (self.right - self.left)
+
+    def py(self, y):
+        return self.bottom - (y - self.ymin) / (self.ymax - self.ymin) * (self.bottom - self.top)
+
+    def contains(self, x, y):
+        return self.xmin <= x <= self.xmax and self.ymin <= y <= self.ymax
+
+
+def _line(x1, y1, x2, y2):
+    return '<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (_f(x1), _f(y1), _f(x2), _f(y2))
+
+
+def _dash_attr(dash):
+    return ' stroke-dasharray="%s"' % dash if dash else ""
+
+
+def _svg_grid_and_axes(fr, xticks, yticks):
+    grid = [_line(fr.px(v), fr.top, fr.px(v), fr.bottom) for v, _ in xticks]
+    grid += [_line(fr.left, fr.py(v), fr.right, fr.py(v)) for v, _ in yticks]
+    axes = [_line(fr.left, fr.ay, fr.right, fr.ay), _line(fr.ax, fr.top, fr.ax, fr.bottom)]
+    axes += [_line(fr.px(v), fr.ay - 3, fr.px(v), fr.ay + 3) for v, _ in xticks]
+    axes += [_line(fr.ax - 3, fr.py(v), fr.ax + 3, fr.py(v)) for v, _ in yticks]
+    return ('<g stroke="%s" stroke-width="1">%s</g>' % (GRID, "".join(grid))
+            + '<rect x="%s" y="%s" width="%s" height="%s" fill="none" stroke="%s" '
+              'stroke-width="1"/>' % (fr.left, fr.top, fr.right - fr.left, fr.bottom - fr.top, FRAME)
+            + '<g stroke="%s" stroke-width="1.2">%s</g>' % (AXIS, "".join(axes)))
+
+
+def _svg_reference_lines(fr, spec, clip_id, warnings):
+    lines = []
+    for v in spec["vlines"]:
+        if fr.xmin <= v <= fr.xmax:
+            lines.append(_line(fr.px(v), fr.top, fr.px(v), fr.bottom))
+        else:
+            warnings.append((None, "vline at x = %g is outside the x range" % v))
+    for v in spec["hlines"]:
+        if fr.ymin <= v <= fr.ymax:
+            lines.append(_line(fr.left, fr.py(v), fr.right, fr.py(v)))
+        else:
+            warnings.append((None, "hline at y = %g is outside the y range" % v))
+    if not lines:
+        return ""
+    return ('<g clip-path="url(#%s)" stroke="%s" stroke-width="1.25" stroke-dasharray="5 4">'
+            '%s</g>' % (clip_id, REF_LINE, "".join(lines)))
+
+
+def _svg_curves(fr, series, clip_id):
+    span = fr.ymax - fr.ymin
+    lo, hi = fr.ymin - 2 * span, fr.ymax + 2 * span   # keep coordinates sane near poles
+    out = []
+    for n, s in enumerate(series):
+        color, dash = SERIES_STYLES[n % len(SERIES_STYLES)]
+        polylines = []
+        for seg in s["segs"]:
+            pts = _simplify_offscreen([(x, min(max(y, lo), hi)) for x, y in seg], fr.ymin, fr.ymax)
+            if len(pts) >= 2:
+                polylines.append('<polyline points="%s"/>' % " ".join(
+                    "%s,%s" % (_f(fr.px(x)), _f(fr.py(y))) for x, y in pts))
+        out.append('<g clip-path="url(#%s)" fill="none" stroke="%s" stroke-width="2" '
+                   'stroke-linecap="round" stroke-linejoin="round"%s>%s</g>'
+                   % (clip_id, color, _dash_attr(dash), "".join(polylines)))
+    return "".join(out)
+
+
+def _svg_points(fr, points, warnings):
+    dots = []
+    for x, y in points:
+        if fr.contains(x, y):
+            dots.append('<circle cx="%s" cy="%s" r="4"/>' % (_f(fr.px(x)), _f(fr.py(y))))
+        else:
+            warnings.append((None, "point (%g, %g) is outside the plot range" % (x, y)))
+    if not dots:
+        return ""
+    # A 2px white ring keeps dots legible where they sit on a curve.
+    return ('<g fill="%s" stroke="#fff" stroke-width="4" paint-order="stroke">%s</g>'
+            % (INK, "".join(dots)))
+
+
+def _svg_tick_labels(fr, xticks, yticks):
+    labels = []
+    for v, text in xticks:
+        if not (fr.origin and abs(v) < 1e-12):
+            labels.append('<text x="%s" y="%s" text-anchor="middle">%s</text>'
+                          % (_f(fr.px(v)), _f(fr.ay + 15), _svg_text(text)))
+    for v, text in yticks:
+        if not (fr.origin and abs(v) < 1e-12):
+            labels.append('<text x="%s" y="%s" text-anchor="end" dy="0.32em">%s</text>'
+                          % (_f(fr.ax - 6), _f(fr.py(v)), _svg_text(text)))
+    if fr.origin:  # one "0" for both axes
+        labels.append('<text x="%s" y="%s" text-anchor="end">0</text>'
+                      % (_f(fr.ax - 5), _f(fr.ay + 15)))
+    # White halo (paint-order stroke) so curves crossing a label don't hide it.
+    return ('<g fill="%s" font-size="11.5" stroke="#fff" stroke-width="3" '
+            'stroke-linejoin="round" paint-order="stroke">%s</g>'
+            % (INK_SOFT, "".join(labels))
+            + '<g fill="%s" font-family="%s" font-size="15" font-style="italic">'
+              '<text x="%s" y="%s">x</text><text x="%s" y="%s" text-anchor="middle">y</text></g>'
+              % (INK, SERIF, fr.right + 4, _f(fr.ay - 5), _f(fr.ax), fr.top - 7))
+
+
+def _svg_legend(series):
+    """Legend rows under the plot: a line sample in the series style, label in ink.
+
+    Returns (svg, extra height)."""
+    items, lx, row = [], MARGIN_LEFT, 0
+    right = PLOT_WIDTH - MARGIN_RIGHT
+    for n, s in enumerate(series):
+        color, dash = SERIES_STYLES[n % len(SERIES_STYLES)]
+        text = _pretty_label(s["label"])
+        width = 30 + len(text) * 7.0
+        if lx > MARGIN_LEFT and lx + width > right:
+            lx, row = MARGIN_LEFT, row + 1
+        y = PLOT_HEIGHT + 12 + row * 20
+        items.append('<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" stroke-width="2" '
+                     'stroke-linecap="round"%s/><text x="%s" y="%s" dy="0.32em">%s</text>'
+                     % (_f(lx), y, _f(lx + 24), y, color, _dash_attr(dash), _f(lx + 30), y,
+                        _svg_text(text)))
+        lx += width + 22
+    if not items:
+        return "", 0
+    return '<g fill="%s" font-size="12.5">%s</g>' % (INK, "".join(items)), (row + 1) * 20 + 6
+
+
 def build_plot(spec, index=1, notes=()):
     """Draw a parsed plot spec.  Returns (html, warnings); raises PlotError."""
     if not spec["funcs"] and not spec["points"]:
@@ -682,14 +828,17 @@ def build_plot(spec, index=1, notes=()):
     for label, fn, lineno in spec["funcs"]:
         ys = [_safe_call(fn, x) for x in xs]
         if all(y is None for y in ys):
-            warnings.append((lineno, "%s has no real values for x in [%s, %s]; not drawn"
-                             % (label, "%g" % xmin, "%g" % xmax)))
+            warnings.append((lineno, "%s has no real values for x in [%g, %g]; not drawn"
+                             % (label, xmin, xmax)))
             continue
         series.append({"label": label, "fn": fn, "ys": ys})
     if not series and not spec["points"]:
         raise PlotError("no curve has real values on the x range")
+    if len(series) > len(SERIES_STYLES):
+        warnings.append((None, "more than %d curves in one plot; styles repeat"
+                         % len(SERIES_STYLES)))
 
-    # 2. Break curves at gaps/jumps/poles (needs a rough vertical scale first).
+    # 2. Break curves at gaps/jumps/poles (this needs a rough vertical scale).
     finite = sorted(y for s in series for y in s["ys"] if y is not None)
     if spec["y"]:
         scale = spec["y"][1] - spec["y"][0]
@@ -702,40 +851,13 @@ def build_plot(spec, index=1, notes=()):
     for s in series:
         s["segs"], s["broken"] = _trace(s["fn"], xs, s["ys"], scale)
 
-    # 3. View.
-    if spec["y"]:
-        ymin, ymax = spec["y"]
-    else:
-        ymin, ymax = _auto_y_range(series, spec["points"], spec["hlines"], xmin, xmax)
-
-    left, right = MARGIN_LEFT, PLOT_WIDTH - MARGIN_RIGHT
-    top, bottom = MARGIN_TOP, PLOT_HEIGHT - MARGIN_BOTTOM
-
-    def px(x):
-        return left + (x - xmin) / (xmax - xmin) * (right - left)
-
-    def py(y):
-        return bottom - (y - ymin) / (ymax - ymin) * (bottom - top)
-
-    x_in = xmin <= 0 <= xmax
-    y_in = ymin <= 0 <= ymax
-    ax = px(0.0) if x_in else left       # where the y-axis is drawn
-    ay = py(0.0) if y_in else bottom     # where the x-axis is drawn
-    origin = x_in and y_in
-    xticks = _ticks(xmin, xmax, 8)
-    yticks = _ticks(ymin, ymax, 6)
+    # 3. Draw.
+    ymin, ymax = spec["y"] or _auto_y_range(series, spec["points"], spec["hlines"], xmin, xmax)
+    fr = _Frame(xmin, xmax, ymin, ymax)
+    xticks, yticks = _ticks(xmin, xmax, 8), _ticks(ymin, ymax, 6)
     clip_id = "tutor-plot-%d-clip" % index
-
-    # Legend layout (below the plot area, wraps into rows).
-    legend, lx, row = [], left, 0
-    for n, s in enumerate(series):
-        text = _pretty_label(s["label"])
-        width = 30 + len(text) * 7.0
-        if lx > left and lx + width > right:
-            lx, row = left, row + 1
-        legend.append((n, text, lx, row))
-        lx += width + 22
-    height = PLOT_HEIGHT + ((row + 1) * 20 + 6 if legend else 0)
+    legend, legend_height = _svg_legend(series)
+    height = PLOT_HEIGHT + legend_height
 
     title = spec["title"]
     if title:
@@ -744,114 +866,21 @@ def build_plot(spec, index=1, notes=()):
         aria = "Graph of " + "; ".join(s["label"] for s in series)
     else:
         aria = "Plot of points"
-    out = ['<svg xmlns="http://www.w3.org/2000/svg" class="plot-svg" role="img" '
-           'aria-label="%s" width="%d" height="%d" viewBox="0 0 %d %d" '
-           'font-family="%s" font-size="12">'
-           % (_svg_text(aria), PLOT_WIDTH, height, PLOT_WIDTH, height, SANS)]
-    out.append('<defs><clipPath id="%s"><rect x="%s" y="%s" width="%s" height="%s"/>'
-               '</clipPath></defs>' % (clip_id, left, top, right - left, bottom - top))
-    out.append('<rect width="%d" height="%d" fill="#fff"/>' % (PLOT_WIDTH, height))
-
-    # Grid, frame, axes.
-    grid = []
-    for v, _ in xticks:
-        X = px(v)
-        grid.append('<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (_f(X), top, _f(X), bottom))
-    for v, _ in yticks:
-        Y = py(v)
-        grid.append('<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (left, _f(Y), right, _f(Y)))
-    out.append('<g stroke="%s" stroke-width="1">%s</g>' % (GRID, "".join(grid)))
-    out.append('<rect x="%s" y="%s" width="%s" height="%s" fill="none" stroke="%s" '
-               'stroke-width="1"/>' % (left, top, right - left, bottom - top, FRAME))
-    axes = ['<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (left, _f(ay), right, _f(ay)),
-            '<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (_f(ax), top, _f(ax), bottom)]
-    for v, _ in xticks:
-        X = px(v)
-        axes.append('<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (_f(X), _f(ay - 3), _f(X), _f(ay + 3)))
-    for v, _ in yticks:
-        Y = py(v)
-        axes.append('<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (_f(ax - 3), _f(Y), _f(ax + 3), _f(Y)))
-    out.append('<g stroke="%s" stroke-width="1.2">%s</g>' % (AXIS, "".join(axes)))
-
-    # Reference lines, curves and points, clipped to the plot area.
-    body = []
-    for v in spec["vlines"]:
-        if xmin <= v <= xmax:
-            body.append('<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (_f(px(v)), top, _f(px(v)), bottom))
-        else:
-            warnings.append((None, "vline at x = %g is outside the x range" % v))
-    for v in spec["hlines"]:
-        if ymin <= v <= ymax:
-            body.append('<line x1="%s" y1="%s" x2="%s" y2="%s"/>' % (left, _f(py(v)), right, _f(py(v))))
-        else:
-            warnings.append((None, "hline at y = %g is outside the y range" % v))
-    if body:
-        out.append('<g clip-path="url(#%s)" stroke="%s" stroke-width="1.25" '
-                   'stroke-dasharray="5 4">%s</g>' % (clip_id, REF_LINE, "".join(body)))
-
-    span = ymax - ymin
-    lo_clamp, hi_clamp = ymin - 2 * span, ymax + 2 * span
-    for n, s in enumerate(series):
-        color, dash = SERIES_STYLES[n % len(SERIES_STYLES)]
-        lines = []
-        for seg in s["segs"]:
-            pts = [(x, min(max(y, lo_clamp), hi_clamp)) for x, y in seg]
-            pts = _simplify_offscreen(pts, ymin, ymax)
-            if len(pts) < 2:
-                continue
-            lines.append('<polyline points="%s"/>' % " ".join(
-                "%s,%s" % (_f(px(x)), _f(py(y))) for x, y in pts))
-        dash_attr = ' stroke-dasharray="%s"' % dash if dash else ""
-        out.append('<g clip-path="url(#%s)" fill="none" stroke="%s" stroke-width="2" '
-                   'stroke-linecap="round" stroke-linejoin="round"%s>%s</g>'
-                   % (clip_id, color, dash_attr, "".join(lines)))
-    if len(series) > len(SERIES_STYLES):
-        warnings.append((None, "more than %d curves in one plot; styles repeat"
-                         % len(SERIES_STYLES)))
-
-    dots = []
-    for x, y in spec["points"]:
-        if xmin <= x <= xmax and ymin <= y <= ymax:
-            dots.append('<circle cx="%s" cy="%s" r="4"/>' % (_f(px(x)), _f(py(y))))
-        else:
-            warnings.append((None, "point (%g, %g) is outside the plot range" % (x, y)))
-    if dots:
-        out.append('<g fill="%s" stroke="#fff" stroke-width="4" paint-order="stroke">%s</g>'
-                   % (INK, "".join(dots)))
-
-    # Tick labels (with a white halo so curves crossing them stay readable).
-    labels = []
-    for v, text in xticks:
-        if origin and abs(v) < 1e-12:
-            continue
-        labels.append('<text x="%s" y="%s" text-anchor="middle">%s</text>'
-                      % (_f(px(v)), _f(ay + 15), _svg_text(text)))
-    for v, text in yticks:
-        if origin and abs(v) < 1e-12:
-            continue
-        labels.append('<text x="%s" y="%s" text-anchor="end" dy="0.32em">%s</text>'
-                      % (_f(ax - 6), _f(py(v)), _svg_text(text)))
-    if origin:
-        labels.append('<text x="%s" y="%s" text-anchor="end">0</text>' % (_f(ax - 5), _f(ay + 15)))
-    out.append('<g fill="%s" font-size="11.5" stroke="#fff" stroke-width="3" '
-               'stroke-linejoin="round" paint-order="stroke">%s</g>' % (INK_SOFT, "".join(labels)))
-    out.append('<g fill="%s" font-family="%s" font-size="15" font-style="italic">'
-               '<text x="%s" y="%s">x</text><text x="%s" y="%s" text-anchor="middle">y</text></g>'
-               % (INK, SERIF, right + 4, _f(ay - 5), _f(ax), top - 7))
-
-    # Legend: line sample in the series style + label in ink.
-    if legend:
-        items = []
-        for n, text, lx, row in legend:
-            color, dash = SERIES_STYLES[n % len(SERIES_STYLES)]
-            y = PLOT_HEIGHT + 12 + row * 20
-            dash_attr = ' stroke-dasharray="%s"' % dash if dash else ""
-            items.append('<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" stroke-width="2" '
-                         'stroke-linecap="round"%s/><text x="%s" y="%s" dy="0.32em">%s</text>'
-                         % (_f(lx), y, _f(lx + 24), y, color, dash_attr, _f(lx + 30), y,
-                            _svg_text(text)))
-        out.append('<g fill="%s" font-size="12.5">%s</g>' % (INK, "".join(items)))
-    out.append("</svg>")
+    svg = "".join([
+        '<svg xmlns="http://www.w3.org/2000/svg" class="plot-svg" role="img" aria-label="%s" '
+        'width="%d" height="%d" viewBox="0 0 %d %d" font-family="%s" font-size="12">'
+        % (_svg_text(aria), PLOT_WIDTH, height, PLOT_WIDTH, height, SANS),
+        '<defs><clipPath id="%s"><rect x="%s" y="%s" width="%s" height="%s"/></clipPath></defs>'
+        % (clip_id, fr.left, fr.top, fr.right - fr.left, fr.bottom - fr.top),
+        '<rect width="%d" height="%d" fill="#fff"/>' % (PLOT_WIDTH, height),
+        _svg_grid_and_axes(fr, xticks, yticks),
+        _svg_reference_lines(fr, spec, clip_id, warnings),
+        _svg_curves(fr, series, clip_id),
+        _svg_points(fr, spec["points"], warnings),
+        _svg_tick_labels(fr, xticks, yticks),
+        legend,
+        "</svg>",
+    ])
 
     parts = ['<figure class="plot">']
     if title:
@@ -859,7 +888,7 @@ def build_plot(spec, index=1, notes=()):
         # a title without math just gets x^2 -> x² for readability.
         shown = title if re.search(r"\$|\\[(\[]", title) else _superscripts(title)
         parts.append("<figcaption>%s</figcaption>" % html.escape(shown, quote=False))
-    parts.append("".join(out))
+    parts.append(svg)
     if notes:
         parts.append('<p class="plot-note screen-only">%s</p>' % _svg_text(
             "Skipped: " + "; ".join(notes)))
@@ -877,12 +906,19 @@ def _plot_error_html(message, lines, fence_lineno):
 def render_plot_block(lines, fence_lineno=1, index=1):
     """Plot fence contents -> (one line of HTML, [(line number, warning)])."""
     spec, problems = parse_plot_block(lines, fence_lineno + 1)
+    if spec["errors"]:
+        lineno, message = spec["errors"][0]
+        return _plot_error_html(message, lines, lineno), problems + spec["errors"]
     notes = ["line %d: %s" % item for item in problems]
     try:
         figure, more = build_plot(spec, index, notes)
     except PlotError as exc:
-        return _plot_error_html(str(exc), lines, fence_lineno), problems + [(fence_lineno, str(exc))]
-    return figure, problems + [(ln or fence_lineno, msg) for ln, msg in more]
+        message = str(exc)
+    except Exception as exc:  # never let one odd plot take down the whole page
+        message = "could not draw this plot (%s: %s)" % (type(exc).__name__, exc)
+    else:
+        return figure, problems + [(ln or fence_lineno, msg) for ln, msg in more]
+    return _plot_error_html(message, lines, fence_lineno), problems + [(fence_lineno, message)]
 
 
 # ---------------------------------------------------------------------------
@@ -1039,10 +1075,19 @@ def _has_display():
     return True
 
 
+def output_path(in_path, out_path=None):
+    """--out as given (a folder means FOLDER/STEM.html), else IN's folder and stem."""
+    src = Path(in_path).expanduser()
+    if not out_path:
+        return src.with_suffix(".html")
+    out = Path(out_path).expanduser()
+    return out / (src.stem + ".html") if out.is_dir() else out
+
+
 def render_file(in_path, out_path=None, title=None, exam=False):
     """Render IN.md to HTML.  Returns (output path, warnings)."""
     src = Path(in_path).expanduser()
-    out = Path(out_path).expanduser() if out_path else src.with_suffix(".html")
+    out = output_path(src, out_path)
     text = src.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
     md, warnings = convert_plot_blocks(text, src.name)
     page_title = title or first_heading(text) or _title_from_stem(src.stem)
@@ -1060,7 +1105,7 @@ def main(argv=None):
                     "printable, offline HTML page.")
     parser.add_argument("input", metavar="IN.md", help="Markdown file to render")
     parser.add_argument("--out", metavar="OUT.html",
-                        help="output file (default: next to IN.md, with .html)")
+                        help="output file or folder (default: next to IN.md, with .html)")
     parser.add_argument("--title", help="page title (default: first '# ' heading)")
     parser.add_argument("--exam", action="store_true",
                         help="mock-exam layout: name/time header, work area after each question")
@@ -1071,7 +1116,7 @@ def main(argv=None):
     src = Path(args.input).expanduser()
     if not src.is_file():
         parser.error("input file not found: %s" % src)
-    out = Path(args.out).expanduser() if args.out else src.with_suffix(".html")
+    out = output_path(src, args.out)
     if out.resolve() == src.resolve():
         parser.error("the output would overwrite the input; pass --out")
     if not TEMPLATE_PATH.is_file() or not (VENDOR_DIR / "VERSIONS.txt").is_file():

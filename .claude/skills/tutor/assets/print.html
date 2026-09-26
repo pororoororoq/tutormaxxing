@@ -128,6 +128,8 @@
   /* ---- Print: always black on white, no screen-only UI */
   @page { size: auto; margin: 16mm 15mm 18mm; }
   @page {
+    /* Page numbers; the empty top box also stops Chrome printing its date/URL header. */
+    @top-center { content: ""; }
     @bottom-right { content: counter(page) " / " counter(pages); font-family: Georgia, serif; font-size: 9pt; color: #555; }
   }
   @media print {
