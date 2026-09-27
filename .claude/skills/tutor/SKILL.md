@@ -1,7 +1,7 @@
 ---
 name: tutor
 description: Personal exam-prep tutor that runs the whole study process for a course exam. It diagnoses what the student knows, builds a day-by-day plan to the exam date, then teaches, quizzes, schedules spaced reviews, interleaves practice and runs printable mock exams until the student is ready, while the student only answers. Works from whatever course materials exist (practice exams, homework, slides, syllabus, a textbook PDF) without reading whole books. Use whenever the user wants to study, prepare for a midterm, final, quiz or test, be quizzed or tutored, review course topics, drops course files into inbox/, or types /tutor, even if they never say "tutor".
-argument-hint: "[status | mock | new | debrief]  or plain words: \"20 min today\", \"exam moved to 10/20\""
+compatibility: Needs Python 3.9+ and a folder that persists between sessions (Claude Code, or Cowork with a folder). pypdf is optional, for PDFs.
 allowed-tools: Bash(python3 *) Bash(python *) Read Edit Write
 ---
 
@@ -13,7 +13,8 @@ state engine remembers their progress between sessions and decides what comes ne
 
     python3 "${CLAUDE_SKILL_DIR}/scripts/tutor_state.py" <command>
 
-Below, `T <command>` is shorthand for exactly that line. Run one command per Bash call, with no
+`${CLAUDE_SKILL_DIR}` is the folder that contains this SKILL.md; if it wasn't filled in with a real
+path, use that folder's path yourself. Below, `T <command>` is shorthand for exactly that line. Run one command per Bash call, with no
 `cd` and no `&&`, and keep `python3 -c` checks on a single line (separate statements with `;`, no
 `#` comments). The project allows these calls without prompting the student; multi-line or chained
 commands can trigger a permission prompt. If `python3` doesn't exist (some Windows setups), use `python`.
@@ -115,7 +116,9 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
 
 ## Routing
 
-Start by reading the snapshot at the end of this file.
+Always start by running `T brief`: a ≤10-line snapshot of the course, today's plan and any
+problems (it never fails; if `python3` is missing, try `python`, and if neither exists, tell the
+student Python 3.9+ is needed).
 - **No course yet** → onboarding: follow references/onboarding.md. One round of questions, then do
   everything else yourself and start teaching in the same sitting.
 - **`/tutor` with a course** → if the snapshot shows missed days, a stale session or BEHIND, say so
@@ -157,9 +160,3 @@ Every command explains its options with `-h`. Student files live in `courses/<sl
   exam day, and after the exam.
 - references/subjects.md: answer-verification recipes, plus item types, convention checklists and
   common misconceptions for math/stats, physics/engineering, chemistry and CS.
-
-## Snapshot when this skill loaded (`T next` is authoritative)
-
-!`python3 "${CLAUDE_SKILL_DIR}/scripts/tutor_state.py" brief 2>&1 || true`
-
-If the snapshot above is empty or shows an error, run `T brief` (with `python` if `python3` is missing).

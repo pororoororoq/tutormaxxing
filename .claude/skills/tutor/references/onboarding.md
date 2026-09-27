@@ -20,7 +20,7 @@ reading, not a textbook's worth. Claude already knows the subject. The materials
 
 ## 1. Intake
 
-- The snapshot lists the files in `inbox/`. Classify each with `P info FILE` (it guesses the kind):
+- `T brief` lists the files in `inbox/`. Classify each with `P info FILE` (it guesses the kind):
   textbook, exam (practice or past), homework, slides, syllabus, notes.
 - Extract before asking: a syllabus or practice exam often states the exam date, length, allowed
   aids and chapters. Anything the student typed with `/tutor` counts too.

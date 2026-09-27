@@ -26,6 +26,22 @@ remembers your progress between sessions. The method comes from learning-science
 It never hands you the answer before you try. Research shows that AI tutors that give answers
 raise homework scores but *lower* exam scores.
 
+## Where the tutor shows up
+
+The tutor is a Claude Code skill, so it appears in two places:
+
+- **Claude Code sessions opened on this folder** (the Code tab of the desktop app, the terminal,
+  or Claude Code on the web). Type `/` and it's listed as `tutor`. A session that was already open
+  when the skill folder was created won't list it: start a new session.
+- **Your account, from any folder**: install `tutor.skill` (built with
+  `python3 scripts/package_skill.py` from the skill-creator skill, or ask Claude to package it) via
+  the **Save skill** button, or upload it under Settings → Capabilities → Skills. It then syncs to
+  every Claude Code session and to Cowork. Re-install after changing the skill here; this repo is
+  the source of truth.
+
+It does *not* work in a plain Chat conversation: chats don't keep files between conversations,
+and the tutor's memory is its files. Use Claude Code, or Cowork with a folder selected.
+
 ## Setup (once)
 
 You need Claude Code (terminal, or the Code tab of the Claude desktop app) and Python 3.9+.
