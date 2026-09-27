@@ -6,7 +6,8 @@ know, builds a day-by-day plan, and teaches, quizzes, spaces your reviews, mixes
 printable mock exams until you're ready. You just answer.
 
 It's built as a Claude Code **skill** (`.claude/skills/tutor/`) plus a small state engine that
-remembers your progress between sessions. The method comes from learning-science research; see
+remembers your progress between sessions. Install it once and it works in every Claude Code
+session, in any folder. The method comes from learning-science research; see
 [docs/research.md](docs/research.md).
 
 ## How it teaches
@@ -26,42 +27,60 @@ remembers your progress between sessions. The method comes from learning-science
 It never hands you the answer before you try. Research shows that AI tutors that give answers
 raise homework scores but *lower* exam scores.
 
-## Where the tutor shows up
+## Install once, use it in every Claude Code session
 
-The tutor is a Claude Code skill, so it appears in two places:
-
-- **Claude Code sessions opened on this folder** (the Code tab of the desktop app, the terminal,
-  or Claude Code on the web). Type `/` and it's listed as `tutor`. A session that was already open
-  when the skill folder was created won't list it: start a new session.
-- **Your account, from any folder**: install `tutor.skill` (built with
-  `python3 scripts/package_skill.py` from the skill-creator skill, or ask Claude to package it) via
-  the **Save skill** button, or upload it under Settings → Capabilities → Skills. It then syncs to
-  every Claude Code session and to Cowork. Re-install after changing the skill here; this repo is
-  the source of truth.
-
-It does *not* work in a plain Chat conversation: chats don't keep files between conversations,
-and the tutor's memory is its files. Use Claude Code, or Cowork with a folder selected.
-
-## Setup (once)
-
-You need Claude Code (terminal, or the Code tab of the Claude desktop app) and Python 3.9+.
+On your computer (Mac, Windows or Linux, with Python 3.9+):
 
 ```bash
-git clone https://github.com/pororoororoq/tutormaxxing.git
-cd tutormaxxing
-python3 -m pip install --user pypdf   # for reading PDFs; the tutor offers to do this for you
+git clone https://github.com/pororoororoq/tutormaxxing.git ~/tutormaxxing
+python3 ~/tutormaxxing/install.py
 ```
 
-Then put your course files in `inbox/`. Practice exams matter most; the textbook is optional.
+Prefer not to type commands? Open the Code tab of the Claude desktop app on any folder and say:
+*"Clone https://github.com/pororoororoq/tutormaxxing into my home folder and run `python3 install.py` in it."*
 
-```
-tutormaxxing/
-  inbox/                <- drop PDFs here: practice exams, homework, slides, syllabus, textbook
-```
+What the installer does:
+- **Links the skill** into `~/.claude/skills/tutor`, the folder Claude Code reads in *every* session.
+  It's a link back to this repo, so `git -C ~/tutormaxxing pull` updates the tutor everywhere.
+- **Adds permission rules** to your user settings (`~/.claude/settings.json`, backed up first), so
+  study sessions don't stop for approval prompts:
+  - `Skill(tutor)`: Claude may load the tutor
+  - `Edit(courses/**)`: it may write its files in your study folder
+  - `Bash(python3 "…/skills/tutor/scripts/*)`: it may run its own scripts
+- **Options**:
+  - `--allow-python`: also approve the short `python3 -c` answer checks (any python3 command, in
+    all projects). Without it, those checks ask first unless you use Auto mode.
+  - `--copy`: copy the skill instead of linking it.
+  - `--uninstall`: remove the skill and only the rules the installer added.
+
+If you don't have Python yet, run `python3 --version` in Terminal on a Mac and it offers to
+install it. On Windows, install it from python.org. The tutor offers to install `pypdf` (for PDFs)
+the first time it needs it.
+
+**Other ways to get it:**
+- **Only in this repo**: open Claude Code in the `tutormaxxing` folder. It uses the project copy and
+  `.claude/settings.json`, which applies after you accept the "trust this folder" prompt.
+- **Through your Claude account**: package it as `tutor.skill` (ask Claude, or run the skill-creator's
+  `package_skill.py`) and click **Save skill**, or upload it under Settings → Capabilities → Skills.
+  It then also reaches Claude Code on the web and Cowork, but you must re-save it after every change.
+  Use one install method, not both, or you'll see two tutors.
+
+It does *not* work in a plain Chat conversation: chats don't keep files between conversations,
+and the tutor's memory is its files.
 
 ## Daily use
 
-Open Claude Code in the `tutormaxxing` folder and type:
+Make one folder per course, for example `~/Study/Calc1`, and put your files in an `inbox/` folder
+inside it. Practice exams matter most; the textbook is optional.
+
+```
+Calc1/
+  inbox/      <- practice exams, homework, slides, syllabus, textbook PDF
+  courses/    <- created by the tutor: your plan, progress, notes, mock exams
+```
+
+Open that folder in a **new** Claude Code session (desktop app Code tab, or `claude` in a terminal)
+and type:
 
 ```
 /tutor
@@ -98,30 +117,17 @@ If formulas ever look like raw code, say "plain math".
 
 ## Your data stays local
 
-Everything about you lives in `courses/` (your materials, progress log, notes, mocks). It's in
-`.gitignore`, so it's never committed: textbooks are copyrighted, and your progress is yours.
+Everything about you lives in the `courses/` folder of your study folder: your materials, progress
+log, notes and mock exams. Nothing is uploaded anywhere. If you study inside this repo, `courses/`
+and `inbox/` are in `.gitignore`, so they're never committed: textbooks are copyrighted, and your
+progress is yours.
 
-## Permissions
+## Permissions in this repo
 
-`.claude/settings.json` lets the tutor load its skill, run Python and edit files under `courses/`
-without asking, so quiz sessions aren't interrupted by permission prompts. Claude Code applies these
-rules only after you **trust the folder**: the first time you open `tutormaxxing` in Claude Code,
-accept the "trust this folder" prompt.
-
-The trade-off: Claude can run any `python3` command in this project without confirmation. If you'd
+`.claude/settings.json` in this repo is broader than the installer's rules: it lets Claude run any
+`python3` command in this project without confirmation, which covers the answer checks too. If you'd
 rather approve each one, delete the `Bash(python3 *)` and `Bash(python *)` lines. Expect a prompt on
 most answers if you do.
-
-## Using it from another folder
-
-To use the skill outside this repo, link it into your personal skills and copy the permissions:
-
-```bash
-ln -s "$(pwd)/.claude/skills/tutor" ~/.claude/skills/tutor
-```
-
-Then add the same `permissions.allow` entries to that project's `.claude/settings.json`. The tutor
-keeps its data in `courses/` inside whichever folder you run it from.
 
 ## Improving it
 
@@ -165,6 +171,7 @@ how many PDF pages were read.
   scripts/pdf_tools.py      maps PDFs cheaply: outline, page labels, search, text, page chunks
   scripts/render.py         Markdown + LaTeX + plots → printable HTML (vendored KaTeX)
   assets/                   print template and vendored libraries
+install.py                  installs the skill for every Claude Code session on your computer
 docs/research.md            the evidence and where every number comes from
-tests/                      unit tests, simulations, PDF/render tests, end-to-end harness
+tests/                      unit tests, simulations, PDF/render/installer tests, end-to-end harness
 ```
