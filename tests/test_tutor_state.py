@@ -696,12 +696,14 @@ class CLI(unittest.TestCase):
         out = self.run_t("set", "--exam", "2026-10-10", "--skip-date", "2026-09-30").stdout
         self.assertIn("14 days left", out)
 
-    def test_brief_shows_no_clock_times(self):
-        self.setup_course()
+    def test_brief_shows_no_session_clock_times(self):
+        self.run_t("init", "--slug", "calc", "--exam", "2026-10-17", "--exam-time", "09:00")
+        self.run_t("import", objectives_json(self.root / "objs.json"))
         self.run_t("next")
         out = self.run_t("brief").stdout
-        self.assertIn("open session from", out)
-        self.assertNotRegex(out, r"\b\d{1,2}:\d{2}\b")
+        self.assertIn("09:00", out.splitlines()[0])                  # the exam's own time is fine
+        line = next(ln for ln in out.splitlines() if ln.startswith("open session from"))
+        self.assertNotRegex(line, r"\b\d{1,2}:\d{2}\b")
 
     def test_pace_setting_and_plan(self):
         self.setup_course()
