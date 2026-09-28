@@ -836,6 +836,8 @@ def decide(st, now, focus=None):
                 a["flags"] = sorted(o.flags)
         if why:
             a["why"] = why
+        if a.get("avoid"):     # in the output itself: the rule in SKILL.md alone was not always followed
+            a["why"] = a.get("why", "") + "; write a new item, never one in `avoid`"
         a.update(kw)
         a.update(base)
         return a

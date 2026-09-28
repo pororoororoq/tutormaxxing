@@ -310,6 +310,17 @@ class Decide(unittest.TestCase):
         a = L.decide("2026-09-27T17:01")
         self.assertEqual((a["mode"], a["obj"], a["hide_topic"], a["conf"]), ("review", "o0", True, True))
 
+    def test_recent_items_come_with_a_do_not_repeat_note(self):
+        L = Log(course())
+        L.session("2026-09-26")
+        L.put({"type": "attempt", "day": "2026-09-26", "sess": L.st.open_session().id, "obj": "o0",
+               "ctx": "probe", "res": "correct", "conf": 3, "item": "d/dx sin(3x^2)", "ts": "2026-09-26T17:05:00"})
+        L.end("2026-09-26T18:00:00")
+        L.session("2026-09-29")
+        a = L.decide("2026-09-29T17:01", focus="o0")
+        self.assertEqual(a["avoid"], ["d/dx sin(3x^2)"])
+        self.assertIn("never one in `avoid`", a["why"])
+
     def test_relearn_waits_for_two_other_items(self):
         L = Log(course())
         L.session("2026-09-26")

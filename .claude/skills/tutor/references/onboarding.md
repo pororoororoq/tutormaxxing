@@ -54,7 +54,8 @@ reading, not a textbook's worth. Claude already knows the subject. The materials
 Priority: practice/past exams > homework/problem sets > slides/syllabus. They define what the
 professor actually tests, which matters more than anything in the textbook.
 - PDFs ≤10 pages: Read them directly (you see equations and figures). Larger: `P text FILE --pages 1-10`,
-  or `P split FILE --pages A-B --out courses/SLUG/tutor/scratch` and Read the chunks.
+  or `P split FILE --pages A-B --out courses/SLUG/tutor/scratch` and Read the chunks. This is for
+  exams, homework and slides only: never split or Read the textbook's chapters (section 4).
 - Every problem type you see becomes (part of) an objective with weight 3.
 - Write `courses/SLUG/tutor/blueprint.md`:
 
@@ -82,6 +83,9 @@ Mock recipe: <question count by kind; time>
   For chemistry and statistics, also locate the data tables → `T set --book-tables "…"`.
 - If section titles are too vague to name objectives, read the section's first page or its
   learning objectives (`P text BOOK --pages N`). Nothing more.
+- Don't read the in-scope sections to build objectives or check notation: section titles, the
+  practice exam and your own knowledge are enough, and a targeted `P find` answers a convention
+  question. Budget for the whole setup: about 15 PDF pages, most of them the practice exam.
 
 ## 5. Build the objectives
 

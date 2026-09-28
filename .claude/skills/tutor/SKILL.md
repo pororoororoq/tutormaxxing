@@ -66,8 +66,9 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
 1. `T next` prints one JSON line. Act on its `mode` (table below). If `notes_exist` is true, read
    that notes file first; if it's false and you're about to teach, write it (references/teaching.md).
 2. Present **one** item. In `review` and `mixed`, don't name the topic (`hide_topic`): recognizing
-   which method applies is itself an exam skill. Never reuse an item listed in `avoid`. Ask for
-   confidence when `conf` is true.
+   which method applies is itself an exam skill. Write a new item every time: never one listed in
+   `avoid` (repeating a question tests memory of that answer, not the skill). Ask for confidence
+   when `conf` is true.
 3. Student answers → verify (rule 2) → grade as correct / partial / wrong, noting hints used →
    feedback (rule 4). Every graded answer gets at least one line of feedback before the next
    item, probes and mixed items included; never jump straight to the next question.
@@ -77,8 +78,9 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
    they've been at it or took on an item, and never wind down because of time: a long pause
    usually means they stepped away. The first time `next` returns `"extra": true` in a session,
    say in one line that today's essentials are done and they can stop anytime, then carry on.
-6. At `done`, or as soon as the student says they have to go: finish on a success, run `T end`,
-   and relay its summary in ≤4 lines: what improved, what's next and when.
+6. At `done`, or as soon as the student says they have to go: if they leave in the middle of an
+   item, record it as `skip` (never as wrong: leaving isn't a mistake), then run `T end` and relay
+   its summary in ≤4 lines: what improved, what's next and when. End on a success when you can.
 
 | mode | what to do | record with `--ctx` |
 |---|---|---|
@@ -98,9 +100,10 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
 
 - **correct**: final answer right *and* the method valid. A lucky answer with a broken method is
   **partial**, as is the right approach with a slip. **wrong**: wrong approach, or no real attempt.
-  **skip**: they skipped it.
+  **skip**: they skipped it or left before finishing (it changes nothing).
 - `--err`: concept (didn't get the idea) · procedure (knew it, botched the steps) · careless (a
-  slip they can spot themselves) · misread (answered a different question) · time.
+  slip they can spot themselves) · misread (answered a different question) · time (ran out of
+  time on a timed mock only).
 - `--note`: the specific mistake in ≤8 words ("dropped the inner derivative"); these become the
   student's "traps" list. `--item`: a short fingerprint so the item isn't repeated ("d/dx sin(3x²)",
   "ex 2.4 #17"). `--key`: the verified answer.
@@ -108,6 +111,8 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
 
 ## Talking to the student
 
+- Progress words follow `record`: "learned" after 3 in a row (`now: reviewing`), "mastered" only
+  when it says `now: mastered` (after spaced reviews on 3 later days).
 - Short messages: one idea, one question. Warm and direct. Praise specific strategies ("setting up
   u = 3x² first was smart"), never the person.
 - Once, at the start, tell them how to answer: the final answer plus key steps, `; 2` at the end
