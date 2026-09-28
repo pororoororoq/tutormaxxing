@@ -28,14 +28,16 @@ reading, not a textbook's worth. Claude already knows the subject. The materials
   otherwise a short numbered list:
   - course name and exam date (and time)
   - what the exam covers (chapters or topics)
-  - minutes per day they can study (default 60) and weekly days off
+  - roughly how long they study on a typical day (default 60 minutes; it only feeds the plan's
+    forecast, since sessions have no timer) and weekly days off
   - calculator / formula sheet / notes allowed? (skip if a practice exam says)
 - No files at all? Say they can drop practice exams, homework, slides or the textbook into
   `inbox/` anytime, and offer to start from the topic list alone (section 8).
 - Create the course. It moves inbox files into `courses/SLUG/materials/` and creates every folder
   the tutor uses (`tutor/notes`, `mocks`, `print`, `scratch`):
   `T init --slug SLUG --title "…" --exam YYYY-MM-DD [--exam-time HH:MM] [--exam-minutes N] [--questions N] [--aids "…"] [--scope "…"] --minutes N [--off sat,sun]`
-  Then for each file: `T set --material "materials/FILE=KIND"`.
+  Then for each file: `T set --material "materials/FILE=KIND"`. The pace is continuous (new topics
+  for as long as they keep going); add `--pace daily` only if they asked for a set number per day.
 - Write course files (blueprint, conventions, objectives, notes) with the Write tool, straight into
   `courses/SLUG/tutor/`. It creates missing folders itself, so never run `mkdir`.
 
@@ -115,12 +117,14 @@ find: choose the most common convention and mark it "(assumed)".
 ## 7. Capacity check and kickoff
 
 - `T plan`. It simulates five students through the prep. If it reports BEHIND, ask one question:
-  add minutes per day, drop the lowest-weight objectives (`T set --triage …`), or keep going (the
-  tutor then teaches the highest-weight objectives first).
+  study more on a typical day (`T set --minutes N` updates the forecast), drop the lowest-weight
+  objectives (`T set --triage …`), or keep going (the tutor then teaches the highest-weight
+  objectives first).
 - Kickoff message (≤6 lines):
   - days until the exam and the number of objectives
   - the plan headline: first teaching done by …, mocks around …
   - how to answer: answer plus key steps, `; 1-3` for confidence, photos of paper welcome
+  - pace: new topics keep coming for as long as they want to go on, and they can stop anytime
   - future sessions start with `/tutor`
   - if math mode is latex, add: "If formulas ever look like raw code, tell me 'plain math'."
 - Then `T next` and ask the first diagnostic question in the same message.

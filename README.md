@@ -2,8 +2,8 @@
 
 An exam-prep tutor for [Claude Code](https://claude.com/claude-code). Give it your course materials
 (practice exams, homework, slides, a textbook PDF) and an exam date. It works out what you already
-know, builds a day-by-day plan, and teaches, quizzes, spaces your reviews, mixes up practice and runs
-printable mock exams until you're ready. You just answer.
+know, plans your prep up to the exam, and teaches, quizzes, spaces your reviews, mixes up practice
+and runs printable mock exams until you're ready. You just answer, for as long as you want each day.
 
 It's built as a Claude Code **skill** (`.claude/skills/tutor/`) plus a small state engine that
 remembers your progress between sessions. Install it once and it works in every Claude Code
@@ -26,6 +26,14 @@ session, in any folder. The method comes from learning-science research; see
 
 It never hands you the answer before you try. Research shows that AI tutors that give answers
 raise homework scores but *lower* exam scores.
+
+## Your pace, no timer
+
+There's no clock. Go through new topics for as long as you like: after each new topic you get a
+few mixed questions on older ones, then the next topic. Stop whenever you want ("I have to go");
+reviews come back on their own days. A long break in the middle doesn't count against you.
+Prefer a set number of new topics per day? Say "one day at a time", and "let's keep going"
+switches back.
 
 ## Install once, use it in every Claude Code session
 
@@ -86,8 +94,9 @@ and type:
 /tutor
 ```
 
-- **The first time**, it asks one round of questions (exam date, chapters, minutes per day), maps your
-  materials, and starts with a few diagnostic questions.
+- **The first time**, it asks one round of questions (exam date, chapters, roughly how long you
+  study on a typical day, which only feeds the forecast), maps your materials, and starts with a few
+  diagnostic questions.
 - **Every day after that**, `/tutor` gives a 2–3 line agenda and the first question. Answer with your
   final answer and key steps. Add `; 1`, `; 2` or `; 3` for how sure you are (guess / fairly sure /
   certain). You can also send a photo of your handwritten work.
@@ -101,10 +110,11 @@ Other commands:
 | `/tutor new` | Set up another course |
 | `/tutor debrief` | After the real exam: record your score, note what surprised you |
 
-Plain language works too: "only 20 min today", "exam moved to 10/20", "I don't get related rates",
+Plain language works too: "I have to go", "exam moved to 10/20", "I don't get related rates",
 "skip chapter 5", "the math looks broken".
 
-Your dashboard is `courses/<course>/tutor/progress.md`, and the plan is in `plan.md` in the same folder.
+Your dashboard is `courses/<course>/tutor/progress.md`. `plan.md` in the same folder lists the
+topics in the order you'll learn them and the key dates (day by day, on the daily pace).
 
 ## Math display
 

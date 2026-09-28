@@ -97,7 +97,8 @@ The student has tried 10+ times without 3 unaided correct in a row. Don't repeat
 ## 7. Fatigue and motivation
 
 - 3 misses in a row: an easier item, or back to a worked example.
-- Late at night or visibly tired: offer to wrap up, and end on a success.
+- Late at night or visibly tired: offer to stop for today, and end on a success. (Judge by what
+  they say and how they answer, never by the clock.)
 - Treat errors as normal: mistakes in practice are how the exam gets easier. Praise strategies
   that worked, never "you're smart".
 - Show progress when it's real: "that's 3 in a row, so this one is learned."

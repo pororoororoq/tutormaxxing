@@ -25,7 +25,6 @@ import os
 import random
 import re
 import shutil
-import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -40,14 +39,17 @@ GAP_RATIO = 0.35          # review gap ~35% of days left before the exam (Cepeda
 GAP_MIN, GAP_MAX = 2, 7   # keep a not-yet-mastered objective within a week
 DUR_RATIO = 0.15          # mastery needs one success gap >= 15% of the prep window (clamped to 2-3 days)
 TEACH_BY = 0.55           # finish first teaching by 55% of the window so late objectives still get spaced
-REVIEW_SHARE = 0.60       # reviews may use <=60% of a session so new learning keeps moving
 STUCK_TRIES = 10          # ~10 tries without learning = wheel-spinning (Beck & Gong 2013) -> rescue
 MAX_TRIES_SESSION = 12    # stop hammering one objective within a single session (fatigue)
 RELEARN_TRIES = 3         # attempts allowed to re-earn a failed review the same day
 RELEARN_GAP = 2           # other items in between before re-testing a failed review
 DAY0_PROBES = 8           # first-session diagnostic sample
-FRONTLOAD = 1.2           # start new objectives ~20% faster than an even spread
-NEW_MINUTES = 25          # time budget per new objective when capping a day's quota
+FRONTLOAD = 1.2           # daily pace: start new objectives ~20% faster than an even spread
+PACES = ("continuous", "daily")  # continuous: new topics as long as the student keeps going (default);
+                                 # daily: a computed number of new topics per day
+LATE_NIGHT = 5            # a sitting that runs past midnight (before 5 am) keeps the day it started on
+# There is no session clock: sessions never time out. The minutes below only drive projections
+# (`plan`, the BEHIND check), which simulate a student studying `minutes` a day.
 MIN_PER = {"probe": 2, "learn": 4, "review": 3, "relearn": 3, "mixed": 4, "mock": 6, "warmup": 2}
 TEACH_OVERHEAD = {"worked": 8, "faded": 4, "independent": 0, None: 4}   # explanation before practice
 NEW_COST = {None: 20, "worked": 28, "faded": 18, "independent": 10}    # est. minutes to first-teach
@@ -289,7 +291,8 @@ class Env:
         self.W = max(1, (self.exam - self.start).days)
         self.dur = clamp(rh(DUR_RATIO * self.W), 2, 3)
         self.deadline = self.start + dt.timedelta(days=int(TEACH_BY * self.W))
-        self.minutes = int(course.get("minutes") or 60)
+        self.minutes = int(course.get("minutes") or 60)     # typical minutes/day: projections only
+        self.pace = course.get("pace") if course.get("pace") in PACES else "continuous"
         self.off = {str(w).strip().lower()[:3] for w in course.get("off_days") or []}
         self.skip = {to_date(s) for s in course.get("skip_dates") or []}
         self.target = float(course.get("target") or 0.95)
@@ -343,6 +346,7 @@ class Obj:
         self.streak = 0
         self.tries = 0                # attempts while learning
         self.learned = None           # date it became learned
+        self.first_learn = None       # date teaching started (daily pace counts new topics per day)
         self.succ = []                # dates of spaced first-try successes
         self.mixed_ok = False         # succeeded first-try in a mixed set or mock
         self.lapses = 0
@@ -490,7 +494,6 @@ class Session:
         self.day = to_date(ev["day"])
         self.start = to_dt(ev["ts"])
         self.last = self.start
-        self.minutes = int(ev.get("minutes") or 60)
         self.plan = dict(ev.get("plan") or {})
         self.end = None
         self.n = 0
@@ -546,11 +549,8 @@ class State:
                 self.sessions.append(Session(ev))
             else:
                 s = self.session(ev.get("sess"))
-                if s is not None:
-                    if act == "end":
-                        s.end = to_dt(ev["ts"])
-                    elif act == "adjust":
-                        s.minutes = int(ev.get("minutes") or s.minutes)
+                if s is not None and act == "end":   # (old logs may hold "adjust" events: ignored)
+                    s.end = to_dt(ev["ts"])
         elif t == "mock":
             if ev.get("act") == "start":
                 self.mocks.append({"id": ev["id"], "label": ev.get("label") or f"mock-{len(self.mocks) + 1}",
@@ -569,11 +569,14 @@ class State:
         if o is None:
             self.last_tag = "unknown-objective"
             return
+        was = o.status
         tag = apply_attempt(o, ev, self.env, idx)
         self.last_tag = tag
+        ctx = ev.get("ctx") or "learn"
+        if ctx == "learn" and o.first_learn is None and was in ("unseen", "learning"):
+            o.first_learn = to_date(ev["day"])             # teaching started (not extra practice)
         if s is None:
             return
-        ctx = ev.get("ctx") or "learn"
         s.n += 1
         s.last = max(s.last, to_dt(ev["ts"]))
         s.tries[o.id] += 1
@@ -658,57 +661,83 @@ def mock_due(st, today):
     return None
 
 
-def mock_size(env, session_minutes):
-    minutes = env.exam_minutes
-    if session_minutes - 15 < minutes:          # leave time to grade
-        minutes = max(20, session_minutes - 15)
-    nq = env.exam_questions or max(4, rh(env.exam_minutes / 8))
-    return max(3, rh(nq * minutes / env.exam_minutes)), minutes
+def mock_size(env):
+    """A full-length mock: the exam's own question count and time limit (shorter on request)."""
+    return env.exam_questions or max(4, rh(env.exam_minutes / 8)), env.exam_minutes
 
 
-def session_plan(st, today, minutes):
+def daily_quota(st, today):
+    """Daily pace only: new topics to start today so first teaching ends by the teach-by date."""
+    env = st.env
+    tl = to_learn(st)
+    if env.pace != "daily" or not tl or env.days_left(today) <= 2:
+        return None
+    end = env.deadline if today <= env.deadline else env.exam - 3 * ONE
+    days = max(1, env.study_days(today, end)) if end >= today else 1
+    return max(1, math.ceil(FRONTLOAD * len(tl) / days))
+
+
+def session_plan(st, today):
     env = st.env
     d = env.days_left(today)
     tl = to_learn(st)
-    end = env.deadline if today <= env.deadline else env.exam - 3 * ONE
-    days = max(1, env.study_days(today, end)) if end >= today else 1
-    mixed_n = 3 if d > 0.45 * env.W else 5
-    due_n = len(due_today(st, today))
-    quota = 0
-    if tl and d > 2:
-        quota = math.ceil(FRONTLOAD * len(tl) / days)
-        review_min = min(REVIEW_SHARE * minutes, MIN_PER["review"] * due_n)
-        cap = int((minutes - review_min - mixed_n * MIN_PER["mixed"]) // NEW_MINUTES)
-        quota = max(1, min(quota, cap))
     first = not any(s.n for s in st.sessions)
     probes = min(DAY0_PROBES, sum(o.status == "unseen" for o in tl)) if first and d > 2 else 0
-    return {"quota": quota, "mixed": mixed_n, "probes": probes, "due": due_n,
-            "mock": mock_due(st, today), "behind": is_behind(st, today)}
+    return {"pace": env.pace, "quota": daily_quota(st, today), "mixed": 3 if d > 0.45 * env.W else 5,
+            "probes": probes, "due": len(due_today(st, today)), "mock": mock_due(st, today),
+            "behind": is_behind(st, today)}
 
 
-def ensure_session(st, now, minutes=None):
-    """Events needed so that a session for `now` is open (closes a stale one first)."""
+def ensure_session(st, now):
+    """Events needed so that a session for `now` is open. Sessions have no time limit: a session is
+    a calendar day of study, however long the breaks in between. A sitting that runs past midnight
+    keeps its day; a session left open from an earlier day is closed first."""
     evs = []
     s = st.open_session()
     if s is not None:
-        same = s.day == now.date() or (mins(s.last, now) < 360 and mins(s.start, now) < 720)
-        if same:
-            if minutes:
-                total = rh(mins(s.start, now)) + int(minutes)
-                if total != s.minutes:
-                    evs.append({"type": "session", "act": "adjust", "sess": s.id, "minutes": total,
-                                "ts": stamp(now)})
+        late_night = ((now.date() - s.day).days == 1 and now.hour < LATE_NIGHT
+                      and mins(s.last, now) < 180)
+        if s.day == now.date() or late_night:
             return evs
         evs.append({"type": "session", "act": "end", "sess": s.id, "ts": stamp(s.last), "auto": True})
     today = now.date()
-    used = sum(mins(x.start, x.end) for x in st.sessions if x.day == today and x.end)
-    if minutes:
-        m = int(minutes)
-    else:
-        m = st.env.minutes if used < 1 else max(15, rh(st.env.minutes - used))
-    evs.append({"type": "session", "act": "start", "day": iso(today), "minutes": m,
-                "plan": session_plan(st, today, m), "ts": stamp(now)})
+    evs.append({"type": "session", "act": "start", "day": iso(today), "plan": session_plan(st, today),
+                "ts": stamp(now)})
     return evs
+
+
+def topic_order(st, behind=False):
+    """Objectives still to learn, in the order teaching would start them (for reports): book order,
+    or heaviest first when behind, each one after its prerequisites."""
+    left = to_learn(st)
+    key = (lambda o: (-o.weight, o.order)) if behind else (lambda o: o.order)
+    done, out = set(), []
+    while left:
+        ready = [o for o in left if all(p in done or p not in st.objs or st.objs[p].triaged
+                                        or RANK[st.objs[p].status] >= 2 for p in o.prereqs)]
+        o = min(ready or left, key=key)
+        out.append(o)
+        done.add(o.id)
+        left.remove(o)
+    return out
+
+
+def next_topic(st, behind=False):
+    """The objective that would be taught next, or None when everything is taught."""
+    order = topic_order(st, behind)
+    return order[0] if order else None
+
+
+def new_topics_note(st, today, sp):
+    """One phrase about new material today, for brief/status/set."""
+    nxt = next_topic(st, sp["behind"])
+    if st.env.days_left(today) <= 2:
+        return "no new topics (last days before the exam)"
+    if nxt is None:
+        return "all topics taught: mixed practice"
+    if st.env.pace == "daily":
+        return f"{plural(sp['quota'] or 1, 'new topic')} (daily pace; next: {nxt.title})"
+    return f"new topics for as long as you like (next: {nxt.title})"
 
 
 def prereqs_ok(st, o, level):
@@ -771,17 +800,22 @@ def pick_format(env, k):
 
 
 def decide(st, now, focus=None):
-    """The next thing the tutor should do. Pure: reads state, never writes."""
+    """The next thing the tutor should do. Pure: reads state, never writes.
+
+    There is no clock: the student studies as long as they like, and nothing here depends on how
+    much time has passed. Order: exam-day/mock/debrief special cases, then relearning today's
+    misses, finishing the topic being taught, due spaced reviews, a short mixed set after each
+    topic learned this session, the next new topic (continuous pace: always; daily pace: up to the
+    day's quota), and finally extra practice."""
     env = st.env
     s = st.open_session()
     if s is None:
         return {"mode": "none", "why": "no open session"}
     today = s.day
     d = env.days_left(today)
-    elapsed = mins(s.start, now)
-    left = s.minutes - elapsed
     act_objs = st.active()
-    base = {"day": iso(today), "days_left": d, "elapsed": max(0, rh(elapsed)), "left": max(0, rh(left))}
+    continuous = env.pace == "continuous"
+    base = {"day": iso(today), "days_left": d, "items": s.n}
 
     def act(mode, o=None, why="", **kw):
         a = {"mode": mode}
@@ -815,7 +849,7 @@ def decide(st, now, focus=None):
         return act("debrief", why=f"the exam was {fmt_day(env.exam)}: ask how it went, record the score")
     if d == 0:
         if s.ctx["warmup"] >= 5:
-            return act("done", why="warm-up finished: wish them luck, remind them to sleep/eat, stop")
+            return act("done", why="warm-up finished: wish them luck, remind them to eat and breathe, stop")
         pool = [o for o in act_objs if o.status in ("reviewing", "mastered") and not s.tries[o.id]]
         pool.sort(key=lambda o: (o.status != "mastered", -o.weight, o.order))
         if not pool:
@@ -825,11 +859,11 @@ def decide(st, now, focus=None):
     m = st.open_mock()
     if m is not None:
         return act("mock", why="mock in progress: collect answers or photos, grade every part, "
-                   "record each, then `mock result`", phase="grade", label=m["label"],
-                   started=m["start"].strftime("%H:%M"), minutes=m.get("minutes"))
+                   "record each, then `mock result`", phase="grade", label=m["label"])
     if s.plan.get("mock") and not any(x["day"] == today for x in st.mocks):
-        n, mm = mock_size(env, s.minutes)
-        return act("mock", why=f"scheduled mock exam #{s.plan['mock']} ({d} days left)", phase="start",
+        n, mm = mock_size(env)
+        return act("mock", why=f"scheduled mock exam #{s.plan['mock']} ({d} days left); offer to shorten "
+                   "it if they can't do a full-length one now", phase="start",
                    label=f"mock-{len(st.mocks) + 1}", n=n, minutes=mm)
 
     if focus:
@@ -854,16 +888,11 @@ def decide(st, now, focus=None):
 
     cur = st.objs.get(s.last_learn) if s.last_learn else None
     if (cur is not None and cur.status == "learning" and not cur.triaged
-            and s.tries[cur.id] < MAX_TRIES_SESSION and left > 5):
+            and s.tries[cur.id] < MAX_TRIES_SESSION):
         return learn_act(cur, f"continue until {LEARN_STREAK} unaided correct in a row")
-    if left <= 0:
-        return act("wrap", why=f"time's up ({rh(elapsed)}/{s.minutes} min): end on a success, then `end`")
 
-    tl = [o for o in act_objs if o.status in ("unseen", "learning")]
     due = sorted(due_today(st, today, s), key=review_order(today))
-    cap = math.inf if (d <= 2 or not tl) else int(REVIEW_SHARE * s.minutes // MIN_PER["review"])
-    mixed_left = max(0, int(s.plan.get("mixed", 3)) - s.ctx["mixed"])
-    if due and s.ctx["review"] < cap:
+    if due:
         o = due[0]
         why = "due for spaced review"
         if o.due < today:
@@ -872,16 +901,36 @@ def decide(st, now, focus=None):
             why += "; last time a CONFIDENT error, re-test it"
         return act("review", o, why, conf=True, hide_topic=True)
 
-    # when behind, an untaught objective is worth more than mixed practice: don't reserve time for it
-    reserve = (0 if s.plan.get("behind") else mixed_left * MIN_PER["mixed"]) + 10
-    if d > 2 and left > reserve:
+    learned = [o for o in act_objs if o.status in ("reviewing", "mastered")]
+    mixed_n = int(s.plan.get("mixed", 3))
+
+    def mixed_act(o, why, **kw):
+        k = s.ctx["mixed"]
+        return act("mixed", o, why, conf=True, hide_topic=True, fmt=pick_format(env, k), **kw)
+
+    # a short interleaved set after each topic learned this session: mixing in older topics right
+    # after new ones is spacing within the session and trains telling the methods apart
+    owed = mixed_n * len(s.learned) - s.ctx["mixed"]
+    if owed > 0 and len(learned) >= 3:
+        o = pick_mixed(st, today, s, learned)
+        if o is not None:
+            done_since = mixed_n - owed
+            return mixed_act(o, "interleaved exam-style practice after the new topic: don't name the topic",
+                             k=done_since + 1, of=mixed_n)
+
+    tl = [o for o in act_objs if o.status in ("unseen", "learning")]
+    if d > 2 and tl:
         unseen = [o for o in tl if o.status == "unseen"]
         if s.plan.get("probes") and s.ctx["probe"] < s.plan["probes"] and unseen:
             o = pick_probe(st, s, unseen)
             if o is not None:
                 return act("probe", o, f"diagnostic {s.ctx['probe'] + 1}/{s.plan['probes']}: one exam-style "
                            "question, no teaching yet", conf=True)
-        if len(s.learn_order) < s.plan.get("quota", 1):
+        quota = None
+        if not continuous:     # the pace may have been switched after today's session opened
+            quota = s.plan.get("quota") if s.plan.get("pace") == "daily" else daily_quota(st, today)
+        started_today = sum(1 for o in act_objs if o.first_learn == today)
+        if continuous or started_today < (quota or 1):
             cands = [o for o in tl if s.tries[o.id] < MAX_TRIES_SESSION
                      and not (o.status == "unseen" and s.tries[o.id])]
             ok = []
@@ -890,45 +939,42 @@ def decide(st, now, focus=None):
                 if ok:
                     break
             if ok:
-                key = (lambda o: (-o.weight, o.order)) if s.plan.get("behind") else (lambda o: o.order)
-                o = sorted(ok, key=key)[0]
+                behind = s.plan.get("behind")
+                o = sorted(ok, key=(lambda o: (-o.weight, o.order)) if behind else (lambda o: o.order))[0]
                 if o.status == "unseen":
-                    return act("probe", o, "first contact: a quick probe decides where teaching starts",
-                               conf=True)
-                return learn_act(o, "next objective in the plan" + (" (behind: highest weight first)"
-                                                                     if s.plan.get("behind") else ""))
+                    return act("probe", o, "next topic: a quick probe decides where teaching starts", conf=True)
+                return learn_act(o, "next topic" + (" (behind: highest weight first)" if behind else ""))
 
-    learned = [o for o in act_objs if o.status in ("reviewing", "mastered")]
-    if mixed_left > 0 and len(learned) >= 3 and left > 0:
+    # nothing new to start right now: at least one mixed set a day (mastery needs a mixed success)
+    if s.ctx["mixed"] < mixed_n and len(learned) >= 3:
         o = pick_mixed(st, today, s, learned)
         if o is not None:
-            k = s.ctx["mixed"]
-            return act("mixed", o, "interleaved exam-style practice: don't name the topic", conf=True,
-                       hide_topic=True, k=k + 1, of=int(s.plan.get("mixed", 3)), fmt=pick_format(env, k))
-
+            return mixed_act(o, "interleaved exam-style practice: don't name the topic",
+                             k=s.ctx["mixed"] + 1, of=mixed_n)
     if relearn:
         return act("relearn", relearn[0], "missed on review earlier today: one fresh item", conf=True)
-    if due and left > 0:
-        return act("review", due[0], "due for spaced review", conf=True, hide_topic=True)
-    if d > 2 and left > 15:                        # spare time: front-load the next new objective
-        cands = [o for o in tl if s.tries[o.id] < MAX_TRIES_SESSION
-                 and not (o.status == "unseen" and s.tries[o.id]) and prereqs_ok(st, o, 1)]
-        if cands:
-            o = sorted(cands, key=lambda o: o.order)[0]
-            if o.status == "unseen":
-                return act("probe", o, "ahead of schedule: quick probe of the next objective", conf=True)
-            return learn_act(o, "ahead of schedule: time left, so start the next objective")
-    if left > 5 and learned:
-        # extra practice only on objectives that have rested: daily drilling would leave no
-        # spacing gap to prove durable memory (and overlearning in one sitting fades fast)
+    if continuous and learned and d > 1:
+        # topics not seen for a few days first: retrieving those strengthens memory the most, and
+        # leaving yesterday's topics alone keeps the spacing gaps that mastery needs
         rested = [o for o in learned if o.last_day is None or (today - o.last_day).days >= env.dur]
         o = pick_mixed(st, today, s, rested)
         if o is not None:
-            return act("mixed", o, "bonus: today's plan is done; a harder exam-level variant", conf=True,
-                       hide_topic=True, hard=True, fmt=pick_format(env, s.ctx["mixed"]))
+            return mixed_act(o, "today's essentials are done; more interleaved practice on a topic not seen "
+                             "for a few days", hard=True, extra=True)
+        more = [o for o in learned if o.last_day == today and s.tries[o.id] < MAX_TRIES_SESSION]
+        if more:
+            o = sorted(more, key=lambda o: (o.p(), -o.weight, s.tries[o.id], o.order))[0]
+            return act("practice", o, "today's essentials are done; extra practice on a weaker topic from "
+                       "today (doesn't change the schedule). A mock exam (/tutor mock) is a good alternative",
+                       conf=False, hide_topic=True, hard=True, extra=True)
     nxt = env.next_study_day(today)
-    return act("done", why="today's plan is complete (stopping early is fine: spacing beats cramming); "
-               "run `end`", next=iso(nxt))
+    if d == 1:
+        why = "the final sweep is done: make the formula sheet, then rest (sleep helps more than cramming now)"
+    elif continuous:
+        why = "everything useful for today is done: a good place to stop (reviews come back on their own)"
+    else:
+        why = "today's planned topics are done: stop here, or switch to continuous pace to keep going"
+    return act("done", why=why + "; run `end`", next=iso(nxt))
 
 
 # --------------------------------------------------------------------------------------
@@ -994,7 +1040,9 @@ MODE_CTX = {"probe": "probe", "learn": "learn", "rescue": "learn", "practice": "
 
 
 def simulate(course, events, start, student=None, seed=7, minutes=None, skip=(), until=None):
-    """Drive `decide` day by day with a synthetic student. Returns (state, per-day log)."""
+    """Drive `decide` day by day with a synthetic student who studies `minutes` a day (default: the
+    course's typical minutes/day). Real sessions have no clock; this budget only models how much a
+    student gets through per day, for projections. Returns (state, per-day log)."""
     rng = random.Random(seed)
     student = student or SimStudent()
     st = replay(course, events)
@@ -1004,6 +1052,7 @@ def simulate(course, events, start, student=None, seed=7, minutes=None, skip=(),
     day = start
     last = min(env.exam, until) if until else env.exam
     skip = set(skip)
+    budget = minutes or env.minutes
 
     st.events_log = list(events)
 
@@ -1020,17 +1069,20 @@ def simulate(course, events, start, student=None, seed=7, minutes=None, skip=(),
             day += ONE
             continue
         now = dt.datetime.combine(day, dt.time(17, 0))
-        for ev in ensure_session(st, now, minutes):
+        t0 = now
+        for ev in ensure_session(st, now):
             put(ev)
         s = st.open_session()
         due0 = due_today(st, day)
         entry = {"day": day, "modes": Counter(), "learned": [], "new": [], "mock": None,
-                 "minutes": s.minutes, "due_start": len(due0), "behind": bool(s.plan.get("behind")),
+                 "minutes": budget, "due_start": len(due0), "behind": bool(s.plan.get("behind")),
                  "overdue_start": sum(1 for o in due0 if o.due < day)}
         for _ in range(400):
+            if mins(t0, now) >= budget:                # the simulated student's usual study time is up
+                break
             a = decide(st, now)
             mode = a["mode"]
-            if mode in ("wrap", "done", "debrief", "none"):
+            if mode in ("done", "debrief", "none"):
                 break
             if mode == "mock":
                 ev = put({"type": "mock", "act": "start", "day": iso(day), "label": a["label"], "n": a["n"],
@@ -1145,10 +1197,18 @@ def write_plan(P, course, events, start):
     title_of = lambda i: st.objs[i].title if i in st.objs else i  # noqa: E731
     pr, lines = plan_lines(course, events, start, title_of)
     env = st.env
-    head = [f"# Study plan: {course.get('title', P.slug)}",
-            f"_Projection from {fmt_day(start)} assuming ~80% accuracy and {env.minutes} min/day. "
-            "It is recomputed after every session, so it adapts to how you actually do._", ""]
-    if pr["taught"]:
+    if env.pace == "daily":
+        intro = (f"_Daily pace. Projection from {fmt_day(start)} assuming ~80% accuracy and {env.minutes} "
+                 "min/day. It is recomputed after every session, so it adapts to how you actually do._")
+    else:
+        intro = ("_Continuous pace: new topics one after another, for as long as you want to keep going; "
+                 f"reviews come back on their own schedule. The dates assume ~{env.minutes} min a day and ~80% "
+                 "accuracy (study longer and you finish sooner). Recomputed after every session._")
+    head = [f"# Study plan: {course.get('title', P.slug)}", intro, ""]
+    order = topic_order(st, is_behind(st, start))
+    if not order:
+        head.append("- Every topic is taught: what's left is spaced reviews, mixed practice and mock exams")
+    elif pr["taught"]:
         head.append(f"- Everything first-taught by about **{fmt_day(pr['taught'])}** "
                     f"({span(pr['taught_range'])}; target {fmt_day(env.deadline)})")
     else:
@@ -1158,8 +1218,25 @@ def write_plan(P, course, events, start):
         head.append(f"- Mock exam around {fmt_day(d)}")
     head.append(f"- Projected at exam day: {pr['mastered']}/{len(st.active())} mastered, "
                 f"readiness ~{pct(pr['readiness']['R'])}")
-    (P.tdir / "plan.md").write_text("\n".join(head + ["", "## Day by day", ""] + lines) + "\n",
-                                    encoding="utf-8")
+    if env.pace == "daily":
+        body = ["## Day by day", ""] + lines
+    else:
+        body = []
+        if order:
+            body += ["## Topics, in the order you'll learn them", ""]
+            body += [f"{k}. {o.title}" + (f" (§{o.spec['sec']})" if o.spec.get("sec") else "")
+                     + (" · in progress" if o.status == "learning" else "") for k, o in enumerate(order, 1)]
+            done = len(st.active()) - len(order)
+            if done:
+                body += ["", f"Already learned: {done} of {len(st.active())}."]
+            body.append("")
+        body += ["## Last days", ""]
+        for day, what in ((env.exam - 2 * ONE, "no new topics, only reviews and mixed practice"),
+                          (env.exam - ONE, "final sweep, formula sheet, early night"),
+                          (env.exam, "EXAM DAY: 5 warm-up items, then go")):
+            if day >= start:
+                body.append(f"- {fmt_day(day)}: {what}")
+    (P.tdir / "plan.md").write_text("\n".join(head + [""] + body) + "\n", encoding="utf-8")
     return pr
 
 
@@ -1270,15 +1347,14 @@ def brief_lines(P, now):
     elif d == 0:
         lines.append("EXAM DAY: 5 easy warm-up items at most, then logistics and encouragement")
     else:
-        sp = session_plan(st, today, env.minutes)
-        bits = [f"{sp['due']} reviews due", f"{sp['quota']} new"]
+        sp = session_plan(st, today)
+        bits = [plural(sp["due"], "review") + " due"]
         if sp["probes"]:
             bits.insert(0, f"first session: {sp['probes']} diagnostic probes")
         if sp["mock"]:
             bits.append(f"MOCK EXAM #{sp['mock']}")
-        bits.append(f"mixed {sp['mixed']}")
-        lines.append(f"today (~{env.minutes} min): " + " · ".join(bits) +
-                     (" · BEHIND: highest weight first" if sp["behind"] else ""))
+        bits.append(new_topics_note(st, today, sp))
+        lines.append("today: " + " · ".join(bits) + (" · BEHIND: highest weight first" if sp["behind"] else ""))
     past = [s for s in st.sessions if s.day < today and s.n]
     if past:
         gap = (today - past[-1].day).days
@@ -1287,8 +1363,8 @@ def brief_lines(P, now):
                      (f" ({missed} study day(s) missed: the schedule already absorbed it)" if missed else ""))
     s = st.open_session()
     if s is not None:
-        lines.append(f"open session from {fmt_day(s.day)} {s.start.strftime('%H:%M')} "
-                     f"({s.n} items so far)" + ("" if s.day == today else ": `next` closes it"))
+        lines.append(f"open session from {fmt_day(s.day)} ({plural(s.n, 'item')} so far)"
+                     + ("" if s.day == today else ": `next` closes it"))
     fl = [f"{o.id}({','.join(sorted(o.flags))})" for o in st.active() if o.flags]
     if fl:
         lines.append("flags: " + " ".join(fl[:6]))
@@ -1369,8 +1445,9 @@ def cmd_init(args):
         "v": 1, "slug": slug, "title": args.title or slug, "created": iso(today), "start": iso(start),
         "exam": {"date": iso(exam), "time": args.exam_time, "minutes": args.exam_minutes,
                  "questions": args.questions, "aids": args.aids, "scope": args.scope, "formats": {}},
-        "minutes": args.minutes, "off_days": split_days(args.off), "skip_dates": [], "math": "auto",
-        "target": 0.95, "materials": {}, "book": {}, "objectives": [], "learner": [], "actual": None,
+        "minutes": args.minutes, "pace": args.pace, "off_days": split_days(args.off), "skip_dates": [],
+        "math": "auto", "target": 0.95, "materials": {}, "book": {}, "objectives": [], "learner": [],
+        "actual": None,
     }
     save_course(P, course)
     P.events.touch()
@@ -1382,7 +1459,7 @@ def cmd_init(args):
     if moved:
         save_course(P, course)
     print(f"created course '{slug}': exam {fmt_day(exam)} ({(exam - today).days} days), "
-          f"{args.minutes} min/day · folder {P.dir}")
+          f"{args.pace} pace · folder {P.dir}")
     for f in moved:
         print(f"adopted {f}")
     print("next: classify materials (`set --material PATH=KIND`), then build objectives and `import` them")
@@ -1562,7 +1639,10 @@ def cmd_set(args):
         course["title"] = args.title
     if args.minutes:
         course["minutes"] = args.minutes
-        msgs.append(f"{args.minutes} min/day")
+        msgs.append(f"~{args.minutes} min/day (for projections)")
+    if args.pace:
+        course["pace"] = args.pace
+        msgs.append(f"{args.pace} pace")
     if args.off is not None:
         course["off_days"] = split_days(args.off)
         msgs.append(f"days off → {course['off_days'] or 'none'}")
@@ -1608,10 +1688,11 @@ def cmd_set(args):
         raise TutorError("the exam must be after the start date")
     save_course(P, course)
     st = replay(course, events)
-    sp = session_plan(st, today, st.env.minutes)
+    sp = session_plan(st, today)
     print("saved: " + ("; ".join(msgs) if msgs else "no changes"))
     print(f"now: {st.env.days_left(today)} days left · teach-by {fmt_day(st.env.deadline)} · "
-          f"today: {sp['quota']} new, {sp['due']} due" + (" · BEHIND" if sp["behind"] else ""))
+          f"{st.env.pace} pace · today: {sp['due']} due, {new_topics_note(st, today, sp)}"
+          + (" · BEHIND" if sp["behind"] else ""))
     return 0
 
 
@@ -1620,7 +1701,7 @@ def cmd_next(args):
     now = get_now(args)
     st = replay(course, events)
     st.notes_dir = P.notes
-    for ev in append_events(P, events, ensure_session(st, now, args.minutes)):
+    for ev in append_events(P, events, ensure_session(st, now)):
         st.apply(ev)
     a = decide(st, now, focus=args.focus)
     jline(with_math(a, course))
@@ -1707,7 +1788,7 @@ def cmd_mock(args):
     if args.action == "start":
         if st.open_mock():
             raise TutorError(f"{st.open_mock()['label']} is still open: record its result first")
-        n, mm = mock_size(st.env, s.minutes)
+        n, mm = mock_size(st.env)
         label = args.label or f"mock-{len(st.mocks) + 1}"
         append_events(P, events, [{"type": "mock", "act": "start", "day": iso(s.day), "label": label,
                                    "n": args.n or n, "minutes": args.minutes or mm, "ts": stamp(now)}])
@@ -1742,8 +1823,7 @@ def cmd_end(args):
     env = st.env
     today = s.day if s is not None else now.date()
     if s is not None and s.n:
-        print(f"session {fmt_day(s.day)}: {s.n} items · {pct(s.correct / s.n)} unaided-correct · "
-              f"{rh(mins(s.start, s.end))} min")
+        print(f"session {fmt_day(s.day)}: {plural(s.n, 'item')} · {pct(s.correct / s.n)} unaided-correct")
         if s.learned:
             print("learned: " + ", ".join(st.objs[i].title for i in s.learned if i in st.objs))
         if s.lapsed:
@@ -1754,8 +1834,12 @@ def cmd_end(args):
     if nxt is not None and env.days_left(today) > 0:
         due_n = sum(1 for o in st.active() if o.due is not None and o.due <= nxt)
         tl = len(to_learn(st))
-        print(f"next session: {fmt_day(nxt)} ({env.days_left(nxt)} days before the exam) · ~{due_n} reviews"
-              + (f" · {tl} objectives still to learn" if tl else ""))
+        left = f" · {plural(tl, 'topic')} still to learn" if tl else ""
+        if env.pace == "continuous":
+            print(f"come back anytime: by {fmt_day(nxt)} ~{plural(due_n, 'review')} will be due{left}")
+        else:
+            print(f"next session: {fmt_day(nxt)} ({env.days_left(nxt)} days before the exam) · "
+                  f"~{plural(due_n, 'review')}{left}")
     write_progress(P, course, st, now)
     if nxt is not None and env.days_left(today) > 1:
         write_plan(P, course, events, nxt)
@@ -1788,9 +1872,10 @@ def cmd_status(args):
                                       ("" if m["predicted"] is None else f" (pred {pct(m['predicted'])})")
                                       for m in done))
     if env.days_left(today) > 0:
-        sp = session_plan(st, today, env.minutes)
-        print(f"pace: {'BEHIND' if sp['behind'] else 'on track'} · teach-by {fmt_day(env.deadline)} · "
-              f"today: {sp['due']} due, {sp['quota']} new" + (f", mock #{sp['mock']}" if sp["mock"] else ""))
+        sp = session_plan(st, today)
+        print(f"{'BEHIND' if sp['behind'] else 'on track'} at ~{env.minutes} min/day · teach-by "
+              f"{fmt_day(env.deadline)} · {env.pace} pace · today: {sp['due']} due, "
+              f"{new_topics_note(st, today, sp)}" + (f", mock #{sp['mock']}" if sp["mock"] else ""))
     return 0
 
 
@@ -1807,8 +1892,10 @@ def cmd_plan(args):
     done_today = any(x.day == today and x.end for x in st.sessions)
     start = (env.next_study_day(today) or today) if (done_today and s is None) else today
     pr = write_plan(P, course, events, start)
-    print(f"projection from {fmt_day(start)} ({env.minutes} min/day, ~80% accuracy):")
-    if pr["taught"]:
+    print(f"projection from {fmt_day(start)} at ~{env.minutes} min/day, ~80% accuracy ({env.pace} pace):")
+    if not to_learn(st):
+        print("- every objective is already taught ✓")
+    elif pr["taught"]:
         print(f"- all objectives first-taught by about {fmt_day(pr['taught'])} ({span(pr['taught_range'])}; "
               f"teach-by {fmt_day(env.deadline)})" + (" ✓" if pr["taught"] <= env.deadline else " (late)"))
     else:
@@ -1872,7 +1959,10 @@ def build_parser():
     p.add_argument("--questions", type=int)
     p.add_argument("--aids", help="e.g. 'no calculator, one formula sheet'")
     p.add_argument("--scope", help="e.g. 'Ch 1-3'")
-    p.add_argument("--minutes", type=int, default=60, help="study minutes per day")
+    p.add_argument("--minutes", type=int, default=60,
+                   help="typical study minutes per day (only for projections: sessions have no clock)")
+    p.add_argument("--pace", choices=PACES, default="continuous",
+                   help="continuous: new topics as long as the student keeps going; daily: a set number per day")
     p.add_argument("--off", help="weekly days off, e.g. sat,sun")
     p.add_argument("--start", help="first study day (default today)")
     p.add_argument("--no-adopt", action="store_true", help="leave inbox/ files where they are")
@@ -1893,7 +1983,8 @@ def build_parser():
     p.add_argument("--formats", help="exam format mix, e.g. free=0.6,short=0.3,mc=0.1")
     p.add_argument("--start")
     p.add_argument("--title")
-    p.add_argument("--minutes", type=int)
+    p.add_argument("--minutes", type=int, help="typical study minutes per day (projections only)")
+    p.add_argument("--pace", choices=PACES)
     p.add_argument("--off")
     p.add_argument("--skip-date", action="append")
     p.add_argument("--unskip-date", action="append")
@@ -1908,8 +1999,8 @@ def build_parser():
     p.add_argument("--book-answers", help="where the answer key is, e.g. 'pdf 1180-1219 (A-1..A-40)'")
     p.add_argument("--book-tables", help="where data tables are")
     p = add("next", cmd_next, "what to do now (opens today's session if needed) -> JSON")
-    p.add_argument("--minutes", type=int, help="minutes the student has from now")
     p.add_argument("--focus", help="objective the student asked for")
+    p.add_argument("--minutes", type=int, help=argparse.SUPPRESS)   # old option, ignored: no clock
     p = add("record", cmd_record, "log one graded attempt -> outcome JSON + next JSON")
     p.add_argument("--obj", required=True)
     p.add_argument("--ctx", required=True, choices=CTXS)

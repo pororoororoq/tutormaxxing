@@ -147,9 +147,9 @@ examples, independent practice and interleaving carry more of the weight there; 
 | Interleaving, discrimination | Mixed sets with the topic hidden, favoring confusable pairs (`pick_mixed`) |
 | Exam-format practice | Blueprint from practice exams; mixed-item formats in blueprint proportions; printable timed mocks |
 | Feedback with explanation, at the first wrong step | SKILL.md rules 4–5 |
-| Engagement bottleneck | `/tutor` → agenda → first question in the same message; every session ends with the next date |
+| Engagement bottleneck | `/tutor` → agenda → first question in the same message; no timer, so the student can keep going while motivated; every session ends with when to come back |
 | LLM errors, sycophancy | Verify after every answer; `void` to correct past grading; hold verdicts under pushback |
-| Sleep, no cramming | No new material in the last 2 days; short final day; exam-day warm-up only |
+| Sleep, no cramming | No new material in the last 2 days; the day before ends after the final sweep; exam-day warm-up only |
 | Grounding in the course, not the whole book | "Map, don't read": practice exams read fully, textbook only mapped and looked up on demand |
 
 ## 5. Where each scheduler number comes from
@@ -161,9 +161,9 @@ examples, independent practice and interleaving carry more of the weight there; 
 | `GAP_RATIO`, `GAP_MIN/MAX` | 0.35, 2–7 days | Optimal gap ≈ 20–40% of the retention interval (Cepeda 2008); err long; ≥1 night of sleep |
 | `DUR_RATIO` | 0.15 → 2–3 days | Durable = succeeded after a real gap, not just on consecutive days |
 | `TEACH_BY` | 55% of the window | Simulation: with 35% gaps, an objective first learned by day ~12 of 21 can still reach mastery |
-| `REVIEW_SHARE` | 60% | Due reviews first, but new learning must keep moving |
+| Pace | continuous (default) or daily | Sessions have no clock: the student studies as long as they like, and a break costs nothing. **Continuous** teaches the next topic as soon as the due reviews are done, with a short mixed set after each new topic. **Daily** starts ⌈1.2 × topics left ÷ study days before the teach-by date⌉ new topics a day (`FRONTLOAD` = 1.2). Spacing comes from the review schedule in both, so learning more today means more reviews later, not shorter gaps. Simulated students do equally well either way |
 | `STUCK_TRIES` | 10 | "Wheel-spinning" definition: 10 attempts without mastery ([Beck & Gong 2013](https://link.springer.com/chapter/10.1007/978-3-642-39112-5_44)) |
-| Mixed sets | 3 items/session, then 5 in the last 45% of the window | Interleaving after initial blocked practice; more exam-format work closer to the exam |
+| Mixed sets | 3 items after each topic learned in a session and at least one set a day; 5 per set in the last 45% of the window | Interleaving after initial blocked practice; more exam-format work closer to the exam |
 | Mocks | ~7 days out (if ≥70% learned; forced at 5), again at 3–4 days out; never in the last 2 days | Time to act on the first mock; second confirms; last days are for consolidation |
 | Readiness p-values | .05 / .30 / .55–.85 / .92 | Heuristic; each (readiness, mock) pair is logged so these can be calibrated against real results |
 | Ready / ace-ready | R ≥ 85%, last mock ≥ 80% / all mastered, last 2 mocks ≥ 95%, predictions within 10 points | Mastery thresholds of 80–90% (Bloom); calibration research (Koriat & Bjork) |
@@ -178,8 +178,9 @@ overloaded students, missed days, a moved exam date, and a one-week window.
 - **Learning styles**: no adequate evidence that matching instruction to a "style" helps
   ([Pashler et al. 2008](https://journals.sagepub.com/doi/full/10.1111/j.1539-6053.2009.01038.x)).
 - **Overlearning in one sitting**: its benefit disappeared after 4 weeks ([Rohrer et al. 2005](https://onlinelibrary.wiley.com/doi/abs/10.1002/acp.1083)).
-  The scheduler only gives extra practice on objectives that have rested for a few days. Drilling
-  everything daily left no spacing gap and, in simulation, *prevented* mastery.
+  Extra work beyond the day's plan goes first to objectives that have rested for a few days. After
+  that, same-day practice is optional and never changes the schedule. Drilling everything daily
+  left no spacing gap and, in simulation, *prevented* mastery.
 - **All-nighters**: trading sleep for study backfires ([Gillen-O'Neel et al. 2013](https://pubmed.ncbi.nlm.nih.gov/22906052/)).
 - **Reading the whole textbook**: Claude already knows first-year STEM content. The successful AI
   tutors were grounded in *course problems and solutions*, not whole books, so the tutor reads

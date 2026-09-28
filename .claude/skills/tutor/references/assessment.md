@@ -18,7 +18,8 @@
   That recognition is a big part of what exams test (interleaving: math g ≈ 0.34; college physics
   homework gains of 50–125%).
 - Ask for confidence on every item and record with `--ctx mixed`.
-- `hard: true` means the plan for today is done: use a harder, multi-step or transfer variant.
+- `hard: true`: use a harder, multi-step or transfer variant. `extra: true`: today's essentials are
+  done and this item is optional (SKILL.md, session loop).
 
 ## 2. Printables
 
@@ -45,11 +46,13 @@ offline, and opens it in the browser. Keep the source files in `courses/SLUG/tut
 ## 3. Mock exams (mode `mock`)
 
 Mocks are scheduled automatically, about a week and 3–4 days before the exam, or run on request.
-1. **Build** from the blueprint: `n` questions in `minutes` minutes (both from `next`), in the exam's
-   formats and point values. Pick objectives by weight (heavier ones appear more), include at least
-   one confusable pair, and use only items the student hasn't seen. Write the questions to
-   `mocks/mock-N.md` and a separate key with a partial-credit rubric to `mocks/mock-N-key.md`.
-   Verify every answer in the key. Never show the key before grading.
+1. **Build** from the blueprint: `n` questions in `minutes` minutes (both from `next`: the real
+   exam's length), in the exam's formats and point values. If they can't sit that long now, offer
+   a shorter mock with proportionally less time (`--n`, `--minutes`) or doing it later today. Pick
+   objectives by weight (heavier ones appear more), include at least one confusable pair, and use
+   only items the student hasn't seen. Write the questions to `mocks/mock-N.md` and a separate
+   key with a partial-credit rubric to `mocks/mock-N-key.md`. Verify every answer in the key.
+   Never show the key before grading.
 2. **Render**: `R courses/SLUG/tutor/mocks/mock-N.md --exam --title "Mock N"`. Ask them to work on
    paper, with only the aids the real exam allows.
 3. **Predict**: ask "What score do you expect, in percent?" before they start.
@@ -80,9 +83,9 @@ Name the unmet criteria plainly, and never promise a grade.
 ## 5. The final two days
 
 - **2 days before**: no new material (the scheduler enforces this). Fragile items and one mixed set.
-- **1 day before**: fragile items first, then a quick sweep; ≤45 minutes. Make a one-page formula
-  and methods sheet as a printable, built from what they struggled with. Making it is good retrieval
-  practice even if notes aren't allowed in the exam.
+- **1 day before**: fragile items first, then a quick sweep; `next` says `done` after it, so stop
+  there. Make a one-page formula and methods sheet as a printable, built from what they struggled
+  with. Making it is good retrieval practice even if notes aren't allowed in the exam.
 - Recommend sleep over late cramming: sleep in the weeks before an exam predicts grades, and
   all-nighters backfire.
 

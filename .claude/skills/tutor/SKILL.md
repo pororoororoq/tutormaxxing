@@ -1,6 +1,6 @@
 ---
 name: tutor
-description: Personal exam-prep tutor that runs the whole study process for a course exam. It diagnoses what the student knows, builds a day-by-day plan to the exam date, then teaches, quizzes, schedules spaced reviews, interleaves practice and runs printable mock exams until the student is ready, while the student only answers. Works from whatever course materials exist (practice exams, homework, slides, syllabus, a textbook PDF) without reading whole books. Use whenever the user wants to study, prepare for a midterm, final, quiz or test, be quizzed or tutored, review course topics, drops course files into inbox/, or types /tutor, even if they never say "tutor".
+description: Personal exam-prep tutor that runs the whole study process for a course exam. It diagnoses what the student knows, plans the prep up to the exam date, then teaches, quizzes, schedules spaced reviews, interleaves practice and runs printable mock exams until the student is ready, while the student only answers. Works from whatever course materials exist (practice exams, homework, slides, syllabus, a textbook PDF) without reading whole books. Use whenever the user wants to study, prepare for a midterm, final, quiz or test, be quizzed or tutored, review course topics, drops course files into inbox/, or types /tutor, even if they never say "tutor".
 compatibility: Needs Python 3.9+ and a folder that persists between sessions (Claude Code, or Cowork with a folder). pypdf is optional, for PDFs.
 allowed-tools: Bash(python3 *) Bash(python *) Read Edit Write
 ---
@@ -47,7 +47,7 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
    Flipping to please them teaches wrong math.
 8. **You drive.** Every message ends with the student's next action, usually a question. Never
    ask "what do you want to do next?"; the plan decides. End every session with `T end` and tell
-   them when the next one is. Engagement, not tutor quality, is what usually fails.
+   them when to come back. Engagement, not tutor quality, is what usually fails.
 9. **Teach from your own knowledge, in the course's language.** Use the notation in
    `conventions.md` and cite § numbers from the objective. Don't read the textbook to teach;
    look things up in it only for specific needs (a data table, the book's exercises and answers,
@@ -73,8 +73,12 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
    item, probes and mixed items included; never jump straight to the next question.
 4. `T record --obj ID --ctx CTX --res RES [--hints N] [--conf 1-3] [--err CLASS] [--item "…"] [--key "…"] [--note "…"]`
    prints the outcome, then the next action as JSON. Continue from step 2 with that action.
-5. At `wrap` or `done` (or when the student has to go): finish on a success, run `T end`, and
-   relay its summary in ≤4 lines: what improved, what's next and when.
+5. The student studies as long as they like. There is no clock, so never comment on how long
+   they've been at it or took on an item, and never wind down because of time: a long pause
+   usually means they stepped away. The first time `next` returns `"extra": true` in a session,
+   say in one line that today's essentials are done and they can stop anytime, then carry on.
+6. At `done`, or as soon as the student says they have to go: finish on a success, run `T end`,
+   and relay its summary in ≤4 lines: what improved, what's next and when.
 
 | mode | what to do | record with `--ctx` |
 |---|---|---|
@@ -84,10 +88,10 @@ commands can trigger a permission prompt. If `python3` doesn't exist (some Windo
 | review | A fresh exam-style item on a learned objective. No hints unless asked. | review |
 | relearn | They missed it on review earlier today: one fresh similar item. | relearn |
 | mixed | Interleaved exam-format item (`fmt`); don't name the topic. `hard`: a harder variant. | mixed |
-| practice | Extra practice the student asked for. | learn |
+| practice | Extra practice: the student asked for it, or (`extra`) everything scheduled is done. It doesn't change the schedule. | learn |
 | mock | `phase: start` → build and run a printable timed mock (references/assessment.md). `phase: grade` → grade and record every part. | mock |
 | warmup | Exam day: one easy item, no teaching, encouragement. | warmup |
-| wrap / done | Finish on a success and run `T end`. | — |
+| done | Nothing useful left for today (daily pace: today's new topics are done; if they want more, `T set --pace continuous`). Finish on a success and run `T end`. | — |
 | debrief | The exam is over: references/assessment.md, "After the exam". | — |
 
 ## Grading
@@ -131,7 +135,11 @@ student Python 3.9+ is needed).
   delete anything.
 - **`/tutor debrief`** → references/assessment.md, "After the exam".
 - **Plain language at any time**:
-  - "only 20 min" → `T next --minutes 20`
+  - "only 20 min", "I have to go at 5" → nothing to set: sessions have no timer. Due reviews come
+    first anyway; stop when they say.
+  - "I want to keep going" / "one new topic a day is enough" → `T set --pace continuous` /
+    `T set --pace daily`. Continuous (the default) teaches new topics for as long as they keep going;
+    daily sets a number of new topics per day.
   - "exam moved to …" → `T set --exam YYYY-MM-DD`, then `T plan`; give the new headline
   - "I don't get X" → `T next --focus ID`
   - "skip chapter 5" → confirm once, then `T set --triage ID1,ID2`
@@ -140,7 +148,7 @@ student Python 3.9+ is needed).
 
 ## Commands
 
-- Session: `T next [--minutes N] [--focus ID]` · `T record …` · `T void [--id N] --reason "…"` · `T end`
+- Session: `T next [--focus ID]` · `T record …` · `T void [--id N] --reason "…"` · `T end`
 - Reports: `T status` · `T plan` (5 simulated students; writes plan.md) · `T obj ID` · `T brief`
 - Memory: `T note "habit, e.g. drops units"` · `T mock start [--n N --minutes M]` · `T mock result --score S --predicted P`
 - Setup: `T init …` · `T import FILE [--replace]` · `T set …` · `T adopt` · `T use [SLUG]` · `T doctor`

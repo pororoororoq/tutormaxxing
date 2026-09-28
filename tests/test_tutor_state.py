@@ -42,9 +42,9 @@ class Log:
         self.st.apply(ev)
         return ev
 
-    def session(self, day, minutes=60, at="17:00"):
+    def session(self, day, at="17:00"):
         now = dt.datetime.fromisoformat(f"{day}T{at}")
-        for e in T.ensure_session(self.st, now, minutes):
+        for e in T.ensure_session(self.st, now):
             self.put(e)
         return self.st.open_session()
 
@@ -66,6 +66,29 @@ class Log:
 
     def decide(self, at, **kw):
         return T.decide(self.st, dt.datetime.fromisoformat(at), **kw)
+
+    def run(self, at, stop=("done",), until=None, n=80):
+        """Follow `decide`: probes answered wrong (so teaching happens), everything else right.
+        Returns the (mode, obj) sequence, ending with the stop mode."""
+        seq = []
+        for _ in range(n):
+            if until is not None and until():
+                break
+            a = self.decide(at)
+            if a["mode"] in stop:
+                seq.append((a["mode"], a.get("obj")))
+                break
+            seq.append((a["mode"], a.get("obj")))
+            probe = a["mode"] == "probe"
+            self.attempt(a["obj"], "wrong" if probe else "correct", T.MODE_CTX[a["mode"]], conf=1 if probe else 3)
+        return seq
+
+
+def past_day0(L):
+    """An earlier session, so the next one has no day-0 diagnostic."""
+    L.session("2026-09-25")
+    L.attempt("o0", "skip", "probe")
+    L.end("2026-09-25T18:00:00")
 
 
 class Transitions(unittest.TestCase):
@@ -261,16 +284,22 @@ class Decide(unittest.TestCase):
     def test_keeps_teaching_the_current_objective(self):
         L = Log(course())
         L.session("2026-09-26")
-        L.put({"type": "session", "act": "adjust", "sess": L.st.open_session().id, "minutes": 60})
         L.st.open_session().plan["probes"] = 0
         L.attempt("o3", "wrong", "learn")
         a = L.decide("2026-09-26T17:10")
         self.assertEqual((a["mode"], a["obj"], a["need"]), ("learn", "o3", 3))
 
-    def test_wrap_when_time_is_up(self):
+    def test_no_clock_hours_away_change_nothing(self):
         L = Log(course())
-        L.session("2026-09-26", minutes=30)
-        self.assertEqual(L.decide("2026-09-26T17:31")["mode"], "wrap")
+        past_day0(L)
+        L.session("2026-09-26", at="09:00")
+        L.attempt("o3", "wrong", "learn", at="2026-09-26T09:05:00")
+        a = L.decide("2026-09-26T09:06")
+        b = L.decide("2026-09-26T23:30")                 # back after a long break: same item, same day
+        self.assertEqual(a, b)
+        self.assertEqual((b["mode"], b["obj"], b["day"]), ("learn", "o3", "2026-09-26"))
+        self.assertFalse({"elapsed", "left", "minutes"} & set(b))
+        self.assertEqual(T.ensure_session(L.st, dt.datetime(2026, 9, 26, 23, 30)), [])
 
     def test_reviews_come_before_new_material_and_hide_the_topic(self):
         L = Log(course())
@@ -313,7 +342,7 @@ class Decide(unittest.TestCase):
         L.session("2026-09-25")
         L.attempt("o0", "skip", "probe")
         L.end("2026-09-25T18:00:00")
-        s = L.session("2026-09-26", minutes=30)
+        s = L.session("2026-09-26")
         self.assertTrue(s.plan["behind"])
         a = L.decide("2026-09-26T17:01")
         self.assertEqual(L.st.objs[a["obj"]].weight, 3)
@@ -328,7 +357,7 @@ class Decide(unittest.TestCase):
         modes = set()
         for i in range(30):
             a = L.decide("2026-10-15T17:10")
-            if a["mode"] in ("done", "wrap"):
+            if a["mode"] == "done":
                 break
             modes.add(a["mode"])
             ctx = T.MODE_CTX.get(a["mode"], "review")
@@ -355,6 +384,98 @@ class Decide(unittest.TestCase):
             L.decide("2026-09-26T17:01", focus="nope")
 
 
+class Pace(unittest.TestCase):
+    """continuous (default): new topics for as long as the student keeps going; daily: a quota a day."""
+
+    def log(self, pace=None, n=8):
+        """o0-o2 learned and reviewed earlier (none due today); o3.. still to learn; a session on 9/26."""
+        c = course(n=n, start="2026-09-22")
+        if pace:
+            c["pace"] = pace
+        L = Log(c)
+        L.session("2026-09-22")
+        for oid in ("o0", "o1", "o2"):
+            L.learn(oid)
+        L.end("2026-09-22T18:00:00")
+        L.session("2026-09-23")
+        for oid in ("o0", "o1", "o2"):
+            L.attempt(oid, "correct", "review", conf=3)     # next due 9/30
+        L.end("2026-09-23T18:00:00")
+        L.session("2026-09-26")
+        return L
+
+    def learned_today(self, L):
+        return sorted(o.id for o in L.st.active() if o.learned == D(2026, 9, 26))
+
+    def test_continuous_is_the_default(self):
+        self.assertEqual(T.Env(course()).pace, "continuous")
+        self.assertIsNone(self.log().st.open_session().plan["quota"])
+
+    def test_continuous_keeps_teaching_with_a_mixed_set_after_a_new_topic(self):
+        L = self.log()
+        seq = L.run("2026-09-26T17:10", stop=("done", "practice"))
+        self.assertEqual(self.learned_today(L), ["o3", "o4", "o5", "o6", "o7"])   # daily quota would be 1
+        modes = [m for m, _ in seq]
+        k = modes.index("mixed")
+        self.assertEqual(modes[:k], ["probe", "learn", "learn", "learn"])       # o3 first...
+        self.assertEqual(modes[k:k + 4], ["mixed", "mixed", "mixed", "probe"])  # ...3 mixed, then on
+        self.assertEqual({o for m, o in seq if m == "mixed"}, {"o0", "o1", "o2"})
+
+    def test_daily_pace_stops_new_topics_at_the_quota(self):
+        L = self.log("daily")
+        self.assertEqual(L.st.open_session().plan["quota"], 1)   # ceil(1.2 * 5 topics / 10 study days)
+        seq = L.run("2026-09-26T17:10")
+        self.assertEqual(self.learned_today(L), ["o3"])
+        self.assertEqual(seq[-1][0], "done")
+        self.assertIn("continuous", L.decide("2026-09-26T18:00")["why"])
+
+    def test_switching_to_daily_mid_session_applies_the_quota(self):
+        L = self.log()
+        L.run("2026-09-26T17:10", until=lambda: L.st.objs["o4"].status == "reviewing")
+        st = T.replay(dict(L.course, pace="daily"), L.events)     # `set --pace daily` now
+        self.assertEqual(T.decide(st, dt.datetime(2026, 9, 26, 18, 0))["mode"], "done")
+        self.assertIn(L.decide("2026-09-26T18:00")["mode"], ("probe", "learn"))   # continuous goes on
+
+    def test_extra_practice_once_everything_scheduled_is_done(self):
+        L = self.log(n=4)
+        seq = L.run("2026-09-26T17:10", stop=("done", "practice"))
+        self.assertEqual(seq[-1][0], "practice")
+        a = L.decide("2026-09-26T17:30")
+        self.assertEqual(a["obj"], "o3")                          # the weakest topic from today
+        self.assertTrue(a["extra"] and a["hide_topic"])
+        self.assertFalse(a["conf"])
+        before = {o.id: (o.status, o.due, list(o.succ), o.relearn_day) for o in L.st.active()}
+        L.attempt("o3", "wrong", "learn")                         # extra practice never moves the schedule
+        self.assertEqual({o.id: (o.status, o.due, list(o.succ), o.relearn_day) for o in L.st.active()}, before)
+        self.assertEqual(self.log("daily", n=4).run("2026-09-26T17:10")[-1][0], "done")
+
+    def test_practice_on_a_known_topic_does_not_use_up_the_daily_quota(self):
+        L = self.log("daily")
+        L.attempt("o5", "correct", "probe", conf=3)          # already known: straight to reviewing
+        L.attempt("o5", "correct", "learn", conf=2)          # extra practice the student asked for
+        self.assertIsNone(L.st.objs["o5"].first_learn)
+        self.assertIn(L.decide("2026-09-26T17:20")["mode"], ("probe", "learn"))
+
+    def test_last_day_stops_after_the_sweep(self):
+        L = Log(course(n=4))
+        L.session("2026-09-26")
+        for oid in ("o0", "o1", "o2", "o3"):
+            L.learn(oid)
+        L.end("2026-09-26T18:00:00")
+        L.session("2026-10-16")                             # 1 day left
+        seq = L.run("2026-10-16T17:10")
+        self.assertEqual([m for m, _ in seq], ["review"] * 4 + ["done"])
+        self.assertIn("final sweep", L.decide("2026-10-16T17:40")["why"])
+
+    def test_topic_order_puts_prerequisites_first(self):
+        c = course(n=4, weights=[1, 3, 1, 3])
+        c["objectives"][1]["prereqs"] = ["o2"]
+        st = T.replay(c, [])
+        self.assertEqual([o.id for o in T.topic_order(st)], ["o0", "o2", "o1", "o3"])
+        self.assertEqual([o.id for o in T.topic_order(st, behind=True)], ["o3", "o0", "o2", "o1"])
+        self.assertEqual(T.next_topic(st).id, "o0")
+
+
 class Mocks(unittest.TestCase):
     def state(self, exam="2026-10-17", learned_frac=0.0):
         st = T.replay(course(n=10, exam=exam), [])
@@ -377,10 +498,11 @@ class Mocks(unittest.TestCase):
         self.assertEqual(T.mock_due(self.state(exam="2026-10-03"), D(2026, 9, 29)), 1)  # W=7, 4 left
         self.assertIsNone(T.mock_due(self.state(exam="2026-10-03"), D(2026, 9, 28)))
 
-    def test_mock_size_fits_the_session(self):
-        env = T.Env(course())
-        self.assertEqual(T.mock_size(env, 90), (6, 50))
-        self.assertEqual(T.mock_size(env, 60), (5, 45))
+    def test_mock_is_full_length(self):
+        self.assertEqual(T.mock_size(T.Env(course())), (6, 50))       # 50-minute exam, ~8 min a question
+        c = course()
+        c["exam"]["questions"] = 9
+        self.assertEqual(T.mock_size(T.Env(c)), (9, 50))
 
 
 class Sessions(unittest.TestCase):
@@ -392,12 +514,29 @@ class Sessions(unittest.TestCase):
         self.assertEqual(T.ensure_session(L.st, now), [])
         self.assertEqual(T.decide(L.st, now)["day"], "2026-09-26")
 
-    def test_second_session_gets_the_remaining_minutes(self):
+    def test_long_break_after_midnight_starts_the_new_day(self):
+        L = Log(course())
+        L.session("2026-09-26", at="22:00")
+        L.attempt("o0", "wrong", "probe", at="2026-09-26T22:10:00")
+        evs = T.ensure_session(L.st, dt.datetime(2026, 9, 27, 4, 0))    # 6 h later
+        self.assertEqual([e["act"] for e in evs], ["end", "start"])
+        self.assertEqual(evs[-1]["day"], "2026-09-27")
+
+    def test_coming_back_later_the_same_day_after_end(self):
         L = Log(course())
         L.session("2026-09-26", at="17:00")
         L.end("2026-09-26T17:40:00")
-        evs = T.ensure_session(L.st, dt.datetime(2026, 9, 26, 20, 0))
-        self.assertEqual(evs[-1]["minutes"], 20)
+        evs = T.ensure_session(L.st, dt.datetime(2026, 9, 26, 21, 0))
+        self.assertEqual([(e["act"], e["day"]) for e in evs], [("start", "2026-09-26")])
+        self.assertNotIn("minutes", evs[0])
+        self.assertNotIn("minutes", evs[0]["plan"])
+
+    def test_old_time_budget_events_are_ignored(self):
+        L = Log(course())
+        s = L.session("2026-09-26")
+        L.put({"type": "session", "act": "adjust", "sess": s.id, "minutes": 20})   # logs written before v2
+        self.assertIsNone(L.st.open_session().end)
+        self.assertNotEqual(L.decide("2026-09-26T23:00")["mode"], "done")
 
     def test_stale_session_is_closed(self):
         L = Log(course())
@@ -545,6 +684,31 @@ class CLI(unittest.TestCase):
         self.setup_course()
         out = self.run_t("set", "--exam", "2026-10-10", "--skip-date", "2026-09-30").stdout
         self.assertIn("14 days left", out)
+
+    def test_brief_shows_no_clock_times(self):
+        self.setup_course()
+        self.run_t("next")
+        out = self.run_t("brief").stdout
+        self.assertIn("open session from", out)
+        self.assertNotRegex(out, r"\b\d{1,2}:\d{2}\b")
+
+    def test_pace_setting_and_plan(self):
+        self.setup_course()
+        plan = self.root / "courses" / "calc" / "tutor" / "plan.md"
+        self.assertIn("continuous pace", self.run_t("status").stdout)
+        self.run_t("plan")
+        text = plan.read_text(encoding="utf-8")
+        self.assertIn("Topics, in the order you'll learn them", text)
+        self.assertIn("1. Title o0 (§1.1)", text)
+        self.assertNotIn("Day by day", text)
+        self.assertIn("daily pace", self.run_t("set", "--pace", "daily").stdout)
+        self.assertIn("1 new topic (daily pace", self.run_t("brief").stdout)
+        self.run_t("plan")
+        self.assertIn("## Day by day", plan.read_text(encoding="utf-8"))
+        self.assertEqual(self.run_t("set", "--pace", "weekly", ok=False).returncode, 2)
+        a = json.loads(self.run_t("next", "--minutes", "20").stdout)     # old option: accepted, ignored
+        self.assertEqual(a["mode"], "probe")
+        self.assertFalse({"elapsed", "left"} & set(a))
 
 
 class Compatibility(unittest.TestCase):
